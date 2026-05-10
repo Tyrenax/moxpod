@@ -1,0 +1,104 @@
+#!/usr/bin/env node
+// MoxMox build script — bundles src/ into dist/chrome/ and dist/firefox/.
+
+import * as esbuild from 'esbuild';
+import { readFileSync, writeFileSync, mkdirSync, cpSync, rmSync, existsSync } from 'fs';
+import { join } from 'path';
+
+const BROWSERS = ['chrome', 'firefox'];
+const ROOT = import.meta.dirname;
+
+// Entry points bundled by esbuild (IIFE, no module runtime needed).
+const BUNDLE_ENTRIES = ['background.js', 'content.js'];
+
+// Files copied as-is (no bundling).
+const COPY_FILES = ['popup.html', 'styles.css'];
+
+function mergeManifests(browser) {
+  const base = JSON.parse(readFileSync(join(ROOT, 'manifests', 'base.json'), 'utf-8'));
+  const override = JSON.parse(readFileSync(join(ROOT, 'manifests', `${browser}.json`), 'utf-8'));
+  return { ...base, ...override };
+}
+
+async function buildBrowser(browser) {
+  const dist = join(ROOT, 'dist', browser);
+
+  // Clean and create dist dir.
+  rmSync(dist, { recursive: true, force: true });
+  mkdirSync(dist, { recursive: true });
+
+  // Bundle entry points.
+  for (const entry of BUNDLE_ENTRIES) {
+    await esbuild.build({
+      entryPoints: [join(ROOT, 'src', entry)],
+      bundle: true,
+      format: 'iife',
+      outfile: join(dist, entry),
+      target: 'es2020',
+      minify: false,
+      sourcemap: false,
+    });
+  }
+
+  // Copy non-bundled files.
+  for (const file of COPY_FILES) {
+    const src = join(ROOT, 'src', file);
+    if (existsSync(src)) {
+      cpSync(src, join(dist, file));
+    }
+  }
+
+  // Copy icons.
+  if (existsSync(join(ROOT, 'icons'))) {
+    cpSync(join(ROOT, 'icons'), join(dist, 'icons'), { recursive: true });
+  }
+
+  // Merge and write manifest.
+  const manifest = mergeManifests(browser);
+  writeFileSync(join(dist, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
+
+  console.log(`✔ Built ${browser} → dist/${browser}/`);
+}
+
+async function main() {
+  const args = process.argv.slice(2).filter(a => !a.startsWith('-'));
+  const targets = args.length > 0 ? args : BROWSERS;
+
+  for (const browser of targets) {
+    if (!BROWSERS.includes(browser)) {
+      console.error(`Unknown browser: ${browser}. Use: ${BROWSERS.join(', ')}`);
+      process.exit(1);
+    }
+    await buildBrowser(browser);
+  }
+}
+
+await main().catch(err => {
+  console.error(err);
+  process.exit(1);
+});
+
+// ─── Watch mode ─────────────────────────────────────────────────────
+if (process.argv.includes('--watch')) {
+  const { watch } = await import('fs');
+  const dirs = [join(ROOT, 'src'), join(ROOT, 'manifests'), join(ROOT, 'icons')];
+  let timer = null;
+
+  function rebuild() {
+    clearTimeout(timer);
+    timer = setTimeout(async () => {
+      try {
+        for (const browser of BROWSERS) await buildBrowser(browser);
+      } catch (e) {
+        console.error('Build error:', e.message);
+      }
+    }, 100);
+  }
+
+  for (const dir of dirs) {
+    if (existsSync(dir)) {
+      watch(dir, { recursive: true }, rebuild);
+    }
+  }
+  console.log('\n👀 Watching for changes… (Ctrl+C to stop)');
+}
