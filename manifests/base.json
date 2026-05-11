@@ -8,6 +8,10 @@
   "permissions": [
     "storage"
   ],
+  "host_permissions": [
+    "http://localhost:8787/*",
+    "https://*.workers.dev/*"
+  ],
   "icons": {
     "16": "icons/moxmox-16.png",
     "32": "icons/moxmox-32.png",
@@ -17,7 +21,7 @@
   "content_scripts": [
     {
       "matches": [
-        "<all_urls>"
+        "https://moxfield.com/*"
       ],
       "js": [
         "content.js"
@@ -25,6 +29,16 @@
       "css": [
         "styles.css"
       ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://moxfield.com/*"
+      ],
+      "js": [
+        "content-main.js"
+      ],
+      "world": "MAIN",
       "run_at": "document_idle"
     }
   ],

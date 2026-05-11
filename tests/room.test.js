@@ -1,0 +1,180 @@
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  generateRoomId,
+  buildShareUrl,
+  extractRoomId,
+  stripRoomParam,
+  isGoldfishPage,
+  ROOM_ID_LENGTH,
+} from '../src/shared/room.js';
+
+describe('generateRoomId', () => {
+  it('produces a string of the correct length', () => {
+    const id = generateRoomId();
+    assert.equal(typeof id, 'string');
+    assert.equal(id.length, ROOM_ID_LENGTH);
+  });
+
+  it('contains only base62 characters', () => {
+    for (let i = 0; i < 20; i++) {
+      const id = generateRoomId();
+      assert.match(id, /^[A-Za-z0-9]+$/);
+    }
+  });
+
+  it('generates unique IDs in a batch', () => {
+    const ids = new Set();
+    for (let i = 0; i < 1000; i++) {
+      ids.add(generateRoomId());
+    }
+    assert.equal(ids.size, 1000, 'all 1000 IDs should be unique');
+  });
+
+  it('matches the server room ID regex', () => {
+    for (let i = 0; i < 50; i++) {
+      const id = generateRoomId();
+      assert.match(id, /^[a-zA-Z0-9_-]{1,64}$/);
+    }
+  });
+});
+
+describe('buildShareUrl', () => {
+  it('appends moxmoxroom param to a simple URL', () => {
+    const url = buildShareUrl(
+      'https://moxfield.com/decks/abc123/goldfish',
+      'myRoom42',
+    );
+    assert.equal(
+      url,
+      'https://moxfield.com/decks/abc123/goldfish?moxmoxroom=myRoom42',
+    );
+  });
+
+  it('preserves existing query parameters', () => {
+    const url = buildShareUrl(
+      'https://moxfield.com/decks/abc123/goldfish?foo=bar',
+      'room1',
+    );
+    const parsed = new URL(url);
+    assert.equal(parsed.searchParams.get('foo'), 'bar');
+    assert.equal(parsed.searchParams.get('moxmoxroom'), 'room1');
+  });
+
+  it('overwrites an existing moxmoxroom param', () => {
+    const url = buildShareUrl(
+      'https://moxfield.com/decks/abc123/goldfish?moxmoxroom=old',
+      'new',
+    );
+    const parsed = new URL(url);
+    assert.equal(parsed.searchParams.get('moxmoxroom'), 'new');
+  });
+
+  it('preserves hash fragments', () => {
+    const url = buildShareUrl(
+      'https://moxfield.com/decks/abc123/goldfish#section',
+      'room1',
+    );
+    const parsed = new URL(url);
+    assert.equal(parsed.hash, '#section');
+    assert.equal(parsed.searchParams.get('moxmoxroom'), 'room1');
+  });
+});
+
+describe('extractRoomId', () => {
+  it('extracts room ID from a URL with the param', () => {
+    const id = extractRoomId(
+      'https://moxfield.com/decks/abc/goldfish?moxmoxroom=ABC123xyz',
+    );
+    assert.equal(id, 'ABC123xyz');
+  });
+
+  it('returns null when param is absent', () => {
+    assert.equal(
+      extractRoomId('https://moxfield.com/decks/abc/goldfish'),
+      null,
+    );
+  });
+
+  it('returns null for empty param', () => {
+    assert.equal(
+      extractRoomId('https://moxfield.com/decks/abc/goldfish?moxmoxroom='),
+      null,
+    );
+  });
+
+  it('returns null for invalid URL', () => {
+    assert.equal(extractRoomId('not a url'), null);
+  });
+
+  it('handles URL with multiple params', () => {
+    const id = extractRoomId(
+      'https://moxfield.com/decks/abc/goldfish?a=1&moxmoxroom=room99&b=2',
+    );
+    assert.equal(id, 'room99');
+  });
+});
+
+describe('stripRoomParam', () => {
+  it('removes moxmoxroom from URL', () => {
+    const url = stripRoomParam(
+      'https://moxfield.com/decks/abc/goldfish?moxmoxroom=room1',
+    );
+    assert.equal(url, 'https://moxfield.com/decks/abc/goldfish');
+  });
+
+  it('preserves other params', () => {
+    const url = stripRoomParam(
+      'https://moxfield.com/decks/abc/goldfish?foo=bar&moxmoxroom=room1&baz=qux',
+    );
+    const parsed = new URL(url);
+    assert.equal(parsed.searchParams.get('foo'), 'bar');
+    assert.equal(parsed.searchParams.get('baz'), 'qux');
+    assert.equal(parsed.searchParams.has('moxmoxroom'), false);
+  });
+
+  it('returns same URL when param is not present', () => {
+    const original = 'https://moxfield.com/decks/abc/goldfish';
+    assert.equal(stripRoomParam(original), original);
+  });
+});
+
+describe('isGoldfishPage', () => {
+  it('returns true for a goldfish URL', () => {
+    assert.equal(
+      isGoldfishPage('https://moxfield.com/decks/abc123/goldfish'),
+      true,
+    );
+  });
+
+  it('returns true with query params', () => {
+    assert.equal(
+      isGoldfishPage(
+        'https://moxfield.com/decks/abc123/goldfish?moxmoxroom=foo',
+      ),
+      true,
+    );
+  });
+
+  it('returns false for deck page without goldfish', () => {
+    assert.equal(
+      isGoldfishPage('https://moxfield.com/decks/abc123'),
+      false,
+    );
+  });
+
+  it('returns false for non-moxfield URLs', () => {
+    assert.equal(
+      isGoldfishPage('https://example.com/decks/abc123/goldfish'),
+      false,
+    );
+  });
+
+  it('returns false for invalid URLs', () => {
+    assert.equal(isGoldfishPage('not a url'), false);
+  });
+
+  it('returns false for moxfield non-deck pages', () => {
+    assert.equal(isGoldfishPage('https://moxfield.com/help'), false);
+  });
+});

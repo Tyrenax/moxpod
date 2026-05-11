@@ -1,1 +1,187 @@
 /* MoxMox content styles */
+
+/* ── Remote highlight (opponent's selection shown in blue) ──────── */
+
+.moxmox-remote-highlight {
+  outline: 3px solid #42a5f5 !important;
+  outline-offset: 2px;
+  z-index: 9999 !important;
+}
+
+/* ── Battlefield divider line ───────────────────────────────────── */
+
+.moxmox-divider {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  right: 0;
+  height: 0;
+  border-top: 1px dashed rgba(255, 255, 255, 0.25);
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* ── Play Together button ───────────────────────────────────────── */
+
+.moxmox-play-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 6px;
+  margin-right: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 3px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+  line-height: 1;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.moxmox-play-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+/* Share-link icon (inline SVG via background) */
+.moxmox-icon-share {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  /* share / link icon */
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='rgba(255,255,255,0.85)' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='18' cy='5' r='3'/%3E%3Ccircle cx='6' cy='12' r='3'/%3E%3Ccircle cx='18' cy='19' r='3'/%3E%3Cline x1='8.59' y1='13.51' x2='15.42' y2='17.49'/%3E%3Cline x1='15.41' y1='6.51' x2='8.59' y2='10.49'/%3E%3C/svg%3E") center/contain no-repeat;
+}
+
+/* Status dots container */
+.moxmox-status-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 2px;
+}
+
+/* Individual status dot */
+.moxmox-status-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #555;
+  flex-shrink: 0;
+}
+
+.moxmox-status-dot.connected {
+  background: #4caf50;
+  box-shadow: 0 0 4px rgba(76, 175, 80, 0.6);
+}
+
+.moxmox-status-dot.connecting {
+  background: #ff9800;
+  animation: moxmox-pulse 1s infinite;
+}
+
+@keyframes moxmox-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+/* ── Share popup overlay ────────────────────────────────────────── */
+
+.moxmox-popup-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 99999;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.moxmox-popup {
+  background: #1e1e2e;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  padding: 20px;
+  width: 480px;
+  max-width: 90vw;
+  color: #e0e0e0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 14px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+
+.moxmox-popup h3 {
+  margin: 0 0 4px;
+  font-size: 16px;
+  color: #fff;
+}
+
+.moxmox-popup p {
+  margin: 0 0 14px;
+  color: #aaa;
+  font-size: 13px;
+}
+
+.moxmox-popup-url-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.moxmox-popup-url {
+  flex: 1;
+  padding: 8px 10px;
+  background: #111;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  color: #ccc;
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 12px;
+  word-break: break-all;
+  user-select: all;
+}
+
+.moxmox-popup-copy-btn {
+  padding: 8px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+  background: #2a2a3e;
+  color: #e0e0e0;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s;
+}
+
+.moxmox-popup-copy-btn:hover {
+  background: #3a3a50;
+}
+
+.moxmox-popup-close-btn {
+  display: block;
+  margin-top: 12px;
+  margin-left: auto;
+  padding: 6px 16px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+  background: transparent;
+  color: #aaa;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.moxmox-popup-close-btn:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: #fff;
+}
+
+.moxmox-popup-copied {
+  color: #4caf50;
+  font-size: 12px;
+  margin-top: 8px;
+}
+
