@@ -8,14 +8,20 @@ import { PlaytestController } from './playtest/index.js';
 
 const SHARED_ZONES = new Set(['library', 'graveyard', 'exile']);
 const MSG_TAG = 'moxmox';
+const URL_CHECK_MS = 500;
 
 let controller = null;
 let syncDepth = 0;
 let controllerReady;
 let resolveControllerReady;
+let controllerReadyResolved = false;
+let controllerInitInProgress = false;
+let forwardedController = null;
+let lastSeenUrl = window.location.href;
+let selectionPollTimer = null;
 
 // Promise that resolves when the controller is initialized.
-controllerReady = new Promise((resolve) => { resolveControllerReady = resolve; });
+resetControllerReady();
 
 /** Get the live React component instance from the controller. */
 function getInstance() {
@@ -25,10 +31,18 @@ function getInstance() {
 // ── Initialization ──────────────────────────────────────────────────
 
 function initController(retries = 30, delay = 1000) {
+  if (!isGoldfishPath()) {
+    controllerInitInProgress = false;
+    return;
+  }
+  if (controllerInitInProgress && retries === 30) return;
+  controllerInitInProgress = true;
   controller = new PlaytestController();
   if (controller.isAvailable()) {
     console.log('[MoxMox MAIN] PlaytestController ready');
+    controllerInitInProgress = false;
     setupEventForwarding();
+    controllerReadyResolved = true;
     resolveControllerReady();
     post({ type: 'ready' });
     return;
@@ -76,6 +90,7 @@ function initController(retries = 30, delay = 1000) {
   if (retries > 0) {
     setTimeout(() => initController(retries - 1, delay), delay);
   } else {
+    controllerInitInProgress = false;
     console.warn('[MoxMox MAIN] Could not find playtest component');
   }
 }
@@ -149,6 +164,13 @@ async function withSync(fn) {
 // ── Event forwarding (PlaytestController → ISOLATED) ────────────────
 
 function setupEventForwarding() {
+  if (forwardedController === controller) return;
+  forwardedController = controller;
+  if (selectionPollTimer) {
+    clearInterval(selectionPollTimer);
+    selectionPollTimer = null;
+  }
+
   controller.on('card:zone-changed', (ev) => {
     if (syncDepth > 0) return;
     const clean = sanitizeEvent(ev);
@@ -188,7 +210,7 @@ function setupEventForwarding() {
 
   // Poll for selection changes (selectedCards is component state, not per-card).
   let lastSelectedSyncIds = [];
-  setInterval(() => {
+  selectionPollTimer = setInterval(() => {
     if (syncDepth > 0) return;
     try {
       const inst = getInstance();
@@ -580,6 +602,55 @@ function assignSyncIds(zone) {
 
 // ── Start ───────────────────────────────────────────────────────────
 
-if (/\/decks\/[^/]+\/goldfish$/.test(window.location.pathname)) {
+watchForPlaytestNavigation();
+ensureControllerInitialized();
+
+function watchForPlaytestNavigation() {
+  window.addEventListener('popstate', () => setTimeout(handlePlaytestRouteChange, 0));
+  window.addEventListener('hashchange', () => setTimeout(handlePlaytestRouteChange, 0));
+  setInterval(() => {
+    handlePlaytestRouteChange();
+  }, URL_CHECK_MS);
+}
+
+function handlePlaytestRouteChange() {
+  const nextUrl = window.location.href;
+  if (nextUrl === lastSeenUrl) return;
+
+  const isPlaytest = isGoldfishPath();
+  lastSeenUrl = nextUrl;
+
+  if (!isPlaytest) {
+    resetController();
+    return;
+  }
+  ensureControllerInitialized();
+}
+
+function ensureControllerInitialized() {
+  if (!isGoldfishPath()) return;
+  if (controller?.isAvailable()) return;
   initController();
+}
+
+function resetController() {
+  controllerInitInProgress = false;
+  controller = null;
+  forwardedController = null;
+  if (controllerReadyResolved) {
+    resetControllerReady();
+  }
+  if (selectionPollTimer) {
+    clearInterval(selectionPollTimer);
+    selectionPollTimer = null;
+  }
+}
+
+function resetControllerReady() {
+  controllerReadyResolved = false;
+  controllerReady = new Promise((resolve) => { resolveControllerReady = resolve; });
+}
+
+function isGoldfishPath() {
+  return /\/decks\/[^/]+\/goldfish$/.test(window.location.pathname);
 }

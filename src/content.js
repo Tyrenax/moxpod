@@ -25,6 +25,7 @@ const GAME_TYPE_SHARED = 'shared';
 const GAME_TYPE_TRADITIONAL = 'traditional';
 const WS_HEARTBEAT_MS = 25000;
 const WS_RECONNECT_MS = 2000;
+const URL_CHECK_MS = 500;
 
 // ── State ───────────────────────────────────────────────────────────
 
@@ -56,6 +57,8 @@ let traditionalLifeInitialized = false;
 let heartbeatTimer = null;
 let reconnectTimer = null;
 let intentionalDisconnect = false;
+let initialized = false;
+let lastSeenUrl = window.location.href;
 const messageLog = [];
 
 /** Generate a unique playerKey for this tab. */
@@ -111,11 +114,16 @@ function resetRoomState(nextGameType) {
 
 // ── Entry point ─────────────────────────────────────────────────────
 
-if (isGoldfishPage(window.location.href)) {
-  init();
-}
+watchForPlaytestNavigation();
+ensurePlaytestInitialized();
 
 function init() {
+  if (initialized) {
+    ensureWidgetInjected();
+    return;
+  }
+  initialized = true;
+
   let roomToJoin = extractRoomId(window.location.href);
   let initialRole = null;
   let initialGameType = null;
@@ -163,6 +171,47 @@ function init() {
       });
     }
   });
+}
+
+function watchForPlaytestNavigation() {
+  window.addEventListener('popstate', () => setTimeout(handlePlaytestRouteChange, 0));
+  window.addEventListener('hashchange', () => setTimeout(handlePlaytestRouteChange, 0));
+  setInterval(() => {
+    handlePlaytestRouteChange();
+  }, URL_CHECK_MS);
+}
+
+function handlePlaytestRouteChange() {
+  const nextUrl = window.location.href;
+  if (nextUrl === lastSeenUrl) return;
+
+  const wasPlaytest = isGoldfishPage(lastSeenUrl);
+  const isPlaytest = isGoldfishPage(nextUrl);
+  lastSeenUrl = nextUrl;
+
+  if (wasPlaytest && !isPlaytest) {
+    handlePlaytestClosed();
+    return;
+  }
+  if (isPlaytest) {
+    init();
+  }
+}
+
+function ensurePlaytestInitialized() {
+  if (!isGoldfishPage(window.location.href)) return;
+  init();
+}
+
+function handlePlaytestClosed() {
+  if (currentRoomId) {
+    leaveCurrentGame();
+  }
+  removeWidget();
+}
+
+function ensureWidgetInjected() {
+  waitForNavbar((navbar) => injectButton(navbar));
 }
 
 // ── postMessage bridge (ISOLATED → MAIN) ────────────────────────────
@@ -232,6 +281,8 @@ function findZoomElement() {
 // ── Button injection ────────────────────────────────────────────────
 
 function injectButton(zoomElement) {
+  if (document.querySelector('.moxmox-widget')) return;
+
   const widget = document.createElement('div');
   widget.className = 'moxmox-widget';
 
@@ -311,6 +362,30 @@ function injectButton(zoomElement) {
     // Ensure the zoom controls stay vertically centered despite our taller widget.
     parentList.style.alignItems = 'center';
     parentList.insertBefore(li, zoomElement);
+  }
+}
+
+function removeWidget() {
+  const widget = document.querySelector('.moxmox-widget');
+  const item = widget?.closest('li');
+  if (item) item.remove();
+  else if (widget) widget.remove();
+
+  localDot = null;
+  remoteDot = null;
+  localNameEl = null;
+  playerGridEl = null;
+  remotePlayerRow = null;
+  remoteNameEl = null;
+  localLifeEl = null;
+  remoteLifeEl = null;
+  if (menuEl) {
+    menuEl.remove();
+    menuEl = null;
+  }
+  if (remoteMenuEl) {
+    remoteMenuEl.remove();
+    remoteMenuEl = null;
   }
 }
 
@@ -676,7 +751,7 @@ function toggleMenu(wrapper) {
 
   const inviteItem = document.createElement('button');
   inviteItem.className = 'moxmox-menu-item';
-  inviteItem.textContent = 'Invite...';
+  inviteItem.textContent = currentRoomId ? 'Invite...' : 'Create...';
   inviteItem.addEventListener('click', (e) => {
     e.stopPropagation();
     menuEl.remove();
@@ -684,18 +759,20 @@ function toggleMenu(wrapper) {
     handleInviteButtonClick();
   });
 
-  const joinItem = document.createElement('button');
-  joinItem.className = 'moxmox-menu-item';
-  joinItem.textContent = 'Join...';
-  joinItem.addEventListener('click', (e) => {
-    e.stopPropagation();
-    menuEl.remove();
-    menuEl = null;
-    showTraditionalJoinPopup();
-  });
-
   menuEl.appendChild(inviteItem);
-  menuEl.appendChild(joinItem);
+
+  if (!currentRoomId) {
+    const joinItem = document.createElement('button');
+    joinItem.className = 'moxmox-menu-item';
+    joinItem.textContent = 'Join...';
+    joinItem.addEventListener('click', (e) => {
+      e.stopPropagation();
+      menuEl.remove();
+      menuEl = null;
+      showTraditionalJoinPopup();
+    });
+    menuEl.appendChild(joinItem);
+  }
 
   if (currentRoomId) {
     const leaveItem = document.createElement('button');
@@ -715,16 +792,36 @@ function toggleMenu(wrapper) {
 
 // ── Button click handler ────────────────────────────────────────────
 
-function handleInviteButtonClick() {
+async function handleInviteButtonClick() {
   if (currentRoomId && gameType === GAME_TYPE_TRADITIONAL) {
+    if (await isCurrentRoomFull()) {
+      showRoomFullInvitePopup();
+      return;
+    }
     showCurrentTraditionalRoomCodePopup();
     return;
   }
   if (currentRoomId && gameType === GAME_TYPE_SHARED) {
+    if (await isCurrentRoomFull()) {
+      showRoomFullInvitePopup();
+      return;
+    }
     showCurrentSharedInvitePopup();
     return;
   }
   ensureUsername(() => showInvitePopup());
+}
+
+async function isCurrentRoomFull() {
+  if (!currentRoomId) return false;
+  try {
+    const info = await fetchRoomInfo(currentRoomId);
+    return !!info.full;
+  } catch (err) {
+    addLog('in', `⚠️ Could not check room capacity: ${err.message}`);
+    const roomMaxPlayers = maxPlayers || 2;
+    return 1 + remotePlayers.size >= roomMaxPlayers;
+  }
 }
 
 // ── WebSocket connection ────────────────────────────────────────────
@@ -1446,6 +1543,55 @@ function showCurrentSharedInvitePopup() {
   });
 }
 
+function showRoomFullInvitePopup() {
+  showMessagePopup({
+    title: 'Room Full',
+    message: "You can't invite anyone else because this room is already full.",
+  });
+}
+
+function showMessagePopup({ title, message }) {
+  if (popupBackdrop) {
+    popupBackdrop.remove();
+    popupBackdrop = null;
+  }
+
+  popupBackdrop = document.createElement('div');
+  popupBackdrop.className = 'moxmox-popup-backdrop';
+
+  const popup = document.createElement('div');
+  popup.className = 'moxmox-popup';
+  popup.style.textAlign = 'center';
+
+  const heading = document.createElement('h3');
+  heading.textContent = title;
+
+  const msg = document.createElement('p');
+  msg.textContent = message;
+
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'moxmox-popup-close-btn';
+  closeBtn.textContent = 'Close';
+  closeBtn.addEventListener('click', () => {
+    popupBackdrop.remove();
+    popupBackdrop = null;
+  });
+
+  popup.appendChild(heading);
+  popup.appendChild(msg);
+  popup.appendChild(closeBtn);
+  popupBackdrop.appendChild(popup);
+
+  popupBackdrop.addEventListener('click', (e) => {
+    if (e.target === popupBackdrop) {
+      popupBackdrop.remove();
+      popupBackdrop = null;
+    }
+  });
+
+  document.body.appendChild(popupBackdrop);
+}
+
 function showCurrentInviteValuePopup({ title, subtitle, value, copiedText }) {
   if (popupBackdrop) {
     popupBackdrop.remove();
@@ -1513,10 +1659,10 @@ function showInvitePopup() {
   popup.className = 'moxmox-popup';
 
   const heading = document.createElement('h3');
-  heading.textContent = 'Invite Players';
+  heading.textContent = 'Create Game';
 
   const subtitle = document.createElement('p');
-  subtitle.textContent = 'Choose a game type to create an invite.';
+  subtitle.textContent = 'Choose a game type to create a room.';
 
   const sections = document.createElement('div');
   sections.className = 'moxmox-game-type-sections';

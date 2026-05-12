@@ -59,7 +59,7 @@ fire-and-forget from MAIN → ISOLATED.
 
 ### Room Creation (Host)
 
-1. User opens **Invite...** from the toolbar menu
+1. User opens **Create...** from the toolbar menu
 2. User chooses **Shared Deck** or **Traditional**
 3. Shared Deck generates a 16-character base62 room ID and full Moxfield URL
 4. Traditional generates a short uppercase room code after the host picks
@@ -395,9 +395,10 @@ The extension injects a multi-line widget into Moxfield's playtest navbar:
 🟢 Opponent ▾          ❤️ 18    🟢 Player 4 ▾          ❤️ 40
 ```
 
-- **Line 1**: Title with hamburger menu (☰) — contains "Invite...", "Join...",
-  and "Leave Game" while connected. In an active Traditional game, "Invite..."
-  shows the current room code instead of creating a new room.
+- **Line 1**: Title with hamburger menu (☰) — contains "Create..." and
+  "Join..." before joining a room, then "Invite..." and "Leave Game" while
+  connected. In an active Traditional game, "Invite..." shows the current room
+  code instead of creating a new room.
 - **Player grid**: Local player is always the upper-left slot. With more than
   two total players, slots 3 and 4 move into a second column next to slots 1
   and 2.
@@ -422,7 +423,8 @@ centered during zoom changes and doesn't interfere with card dragging.
   via `instance.handleSaveData()`
 - **Room connection**: `sessionStorage` stores `moxmox_room`,
   `moxmox_role`, `moxmox_game_type`, and `moxmox_player_key` for reconnection
-  on page refresh
+  on page refresh. Navigating away from the playtest route leaves the MoxMox
+  room and clears this state.
 - **Connection reliability**: the content script sends a lightweight WebSocket
   heartbeat and automatically reconnects after unexpected disconnects
 - **Username**: `chrome.storage.local` stores `moxmox_username` (persists

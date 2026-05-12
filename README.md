@@ -6,7 +6,7 @@ Gathering games on [Moxfield's playtest page](https://moxfield.com).
 ## How It Works
 
 1. Each player opens a Moxfield deck's playtest page
-2. The host clicks **Invite...** in the MoxMox toolbar menu
+2. The host clicks **Create...** in the MoxMox toolbar menu
 3. The host chooses **Shared Deck** or **Traditional**
 4. Guests either open the Shared Deck invite link or enter the Traditional room
    code from **Join...**
