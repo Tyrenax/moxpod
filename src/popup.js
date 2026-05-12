@@ -17,7 +17,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (!state || !state.isGoldfish) {
     const msg = document.createElement('div');
     msg.className = 'not-playtest';
-    msg.innerHTML = 'Navigate to a Moxfield playtest page<br>to use MoxMox.';
+    msg.append('Navigate to a Moxfield playtest page', document.createElement('br'), 'to use MoxMox.');
     contentEl.appendChild(msg);
     return;
   }
@@ -104,55 +104,58 @@ function updatePanel(state) {
     : state.gameType === 'shared'
       ? 'Shared Deck'
       : 'Not selected';
-  const players = state.players || [];
-  const playerRows = players.map(player => `
-    <div class="status-row">
-      <span class="status-label">${escapeHtml(player.username || 'Player')}</span>
-      <span class="dot ${player.connected === false ? '' : 'green'}"></span>
-      <span class="status-value">${playerStatusText(player)}</span>
-    </div>
-  `).join('');
   const localExtras = [
     state.localHandCount != null ? `Hand ${state.localHandCount}` : '',
   ].filter(Boolean).join(' · ');
 
-  panelEl.innerHTML = `
-    <div class="status-row">
-      <span class="status-label">You</span>
-      <span class="dot ${dotClass(state.localStatus)}"></span>
-      <span class="status-value">${localExtras || statusText(state.localStatus)}</span>
-    </div>
-    <div class="status-row">
-      <span class="status-label">Opponent</span>
-      <span class="dot ${dotClass(state.remoteStatus)}"></span>
-      <span class="status-value">${statusText(state.remoteStatus)}</span>
-    </div>
-    <div class="status-row">
-      <span class="status-label">Role</span>
-      <span class="status-value">${roleText}</span>
-    </div>
-    <div class="status-row">
-      <span class="status-label">Game</span>
-      <span class="status-value">${gameTypeText}</span>
-    </div>
-    ${
-      state.maxPlayers
-        ? `<div class="status-row">
-             <span class="status-label">Max Players</span>
-             <span class="status-value">${state.maxPlayers}</span>
-           </div>`
-        : ''
-    }
-    ${
-      state.roomId
-        ? `<div class="status-row">
-             <span class="status-label">Room</span>
-             <span class="room-id">${state.roomId}</span>
-           </div>`
-        : ''
-    }
-    ${playerRows}
-  `;
+  const rows = [
+    createStatusRow('You', localExtras || statusText(state.localStatus), {
+      dotClassName: dotClass(state.localStatus),
+    }),
+    createStatusRow('Opponent', statusText(state.remoteStatus), {
+      dotClassName: dotClass(state.remoteStatus),
+    }),
+    createStatusRow('Role', roleText),
+    createStatusRow('Game', gameTypeText),
+  ];
+
+  if (state.maxPlayers) {
+    rows.push(createStatusRow('Max Players', state.maxPlayers));
+  }
+  if (state.roomId) {
+    rows.push(createStatusRow('Room', state.roomId, { valueClassName: 'room-id' }));
+  }
+  for (const player of state.players || []) {
+    rows.push(createStatusRow(player.username || 'Player', playerStatusText(player), {
+      dotClassName: player.connected === false ? '' : 'green',
+    }));
+  }
+
+  panelEl.replaceChildren(...rows);
+}
+
+function createStatusRow(labelText, valueText, { dotClassName = null, valueClassName = 'status-value' } = {}) {
+  const row = document.createElement('div');
+  row.className = 'status-row';
+
+  const label = document.createElement('span');
+  label.className = 'status-label';
+  label.textContent = labelText;
+  row.appendChild(label);
+
+  if (dotClassName !== null) {
+    const dot = document.createElement('span');
+    dot.className = 'dot';
+    if (dotClassName) dot.classList.add(dotClassName);
+    row.appendChild(dot);
+  }
+
+  const value = document.createElement('span');
+  value.className = valueClassName;
+  value.textContent = String(valueText);
+  row.appendChild(value);
+
+  return row;
 }
 
 function playerStatusText(player) {
@@ -162,22 +165,12 @@ function playerStatusText(player) {
   return parts.join(' · ') || statusText(player.connected === false ? 'disconnected' : 'connected');
 }
 
-function escapeHtml(value) {
-  return String(value).replace(/[&<>"']/g, (ch) => ({
-    '&': '&amp;',
-    '<': '&lt;',
-    '>': '&gt;',
-    '"': '&quot;',
-    "'": '&#39;',
-  }[ch]));
-}
-
 function appendLogEntries(entries, fromIndex) {
   if (!logEl) return;
 
   // Clear the "No messages yet" placeholder on first real entry.
   if (fromIndex === 0 && entries.length > 0) {
-    logEl.innerHTML = '';
+    logEl.replaceChildren();
   }
 
   for (let i = fromIndex; i < entries.length; i++) {

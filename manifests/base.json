@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "MoxMox",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": "Nate Finch",
   "homepage_url": "https://github.com/natefinch/moxmox",
   "description": "MoxMox browser extension",
@@ -16,6 +16,7 @@
     "16": "icons/moxmox-16.png",
     "32": "icons/moxmox-32.png",
     "48": "icons/moxmox-48.png",
+    "64": "icons/moxmox-64.png",
     "128": "icons/moxmox-128.png"
   },
   "content_scripts": [
@@ -50,6 +51,7 @@
       "16": "icons/moxmox-16.png",
       "32": "icons/moxmox-32.png",
       "48": "icons/moxmox-48.png",
+      "64": "icons/moxmox-64.png",
       "128": "icons/moxmox-128.png"
     },
     "default_popup": "popup.html",

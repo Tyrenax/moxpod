@@ -411,7 +411,7 @@ function refreshLocalUsername() {
   if (!localNameEl) return;
   chrome.storage.local.get('moxmox_username', (result) => {
     const name = result.moxmox_username?.trim();
-    localNameEl.innerHTML = '';
+    localNameEl.replaceChildren();
     if (name) {
       localNameEl.textContent = name;
     } else {
@@ -456,7 +456,7 @@ function updateRemotePlayersFromList(players = []) {
 
 function setRemotePlayersDisplay(players) {
   if (!remotePlayerRow) return;
-  remotePlayerRow.innerHTML = '';
+  remotePlayerRow.replaceChildren();
   remotePlayerRow.style.display = players.length > 0 ? 'contents' : 'none';
   if (playerGridEl) {
     playerGridEl.classList.toggle('multi', players.length + 1 > 2);
@@ -486,13 +486,11 @@ function setRemotePlayersDisplay(players) {
 
     const lifeEl = document.createElement('span');
     lifeEl.className = 'moxmox-life';
-    lifeEl.innerHTML = player.life != null
-      ? `❤️ <span class="moxmox-life-value">${player.life}</span>` : '';
+    setMetricDisplay(lifeEl, '❤️', player.life, 'moxmox-life-value');
 
     const handCountEl = document.createElement('span');
     handCountEl.className = 'moxmox-hand-count';
-    handCountEl.innerHTML = player.handCount != null
-      ? `🃏 <span class="moxmox-hand-count-value">${player.handCount}</span>` : '';
+    setMetricDisplay(handCountEl, '🃏', player.handCount, 'moxmox-hand-count-value');
 
     row.appendChild(dot);
     row.appendChild(nameEl);
@@ -793,17 +791,24 @@ function createCardImage(card) {
 
 function updateLocalLife(life) {
   if (localLifeEl) {
-    localLifeEl.innerHTML = life != null
-      ? `❤️ <span class="moxmox-life-value">${life}</span>` : '';
+    setMetricDisplay(localLifeEl, '❤️', life, 'moxmox-life-value');
   }
 }
 
 function updateLocalHandCount(count) {
   localHandCount = count;
   if (localHandCountEl) {
-    localHandCountEl.innerHTML = count != null
-      ? `🃏 <span class="moxmox-hand-count-value">${count}</span>` : '';
+    setMetricDisplay(localHandCountEl, '🃏', count, 'moxmox-hand-count-value');
   }
+}
+
+function setMetricDisplay(container, icon, value, valueClass) {
+  container.replaceChildren();
+  if (value == null) return;
+  const valueEl = document.createElement('span');
+  valueEl.className = valueClass;
+  valueEl.textContent = String(value);
+  container.append(icon, valueEl);
 }
 
 function updateRemoteLife(life, senderId = null, username = null) {
