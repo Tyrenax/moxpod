@@ -61,6 +61,16 @@ else
 fi
 
 TAG="v${VERSION}"
+CHROME_ZIP=""
+FIREFOX_XPI=""
+UNSIGNED_FIREFOX_ZIP=""
+VERSION_FILES_UPDATED=false
+RELEASE_COMMIT_CREATED=false
+TAG_CREATED=false
+TAG_PUSHED=false
+MAIN_PUSHED=false
+RELEASE_CREATED=false
+CLEANUP_ACTIVE=false
 
 echo "Current version: $CURRENT → releasing $TAG ($BUMP_LABEL)"
 
@@ -130,42 +140,94 @@ if git rev-parse "$TAG" &>/dev/null; then
   exit 1
 fi
 
+write_version_files() {
+  local target_version="$1"
+  node - "$target_version" <<'NODE'
+import { existsSync, readFileSync, writeFileSync } from 'fs';
+
+const version = process.argv[2];
+
+function updateJson(path, update) {
+  if (!existsSync(path)) return false;
+  const json = JSON.parse(readFileSync(path, 'utf8'));
+  update(json);
+  writeFileSync(path, JSON.stringify(json, null, 2) + '\n');
+  console.log(`  ${path} ✓`);
+  return true;
+}
+
+updateJson('manifests/base.json', json => {
+  json.version = version;
+});
+updateJson('package.json', json => {
+  json.version = version;
+});
+updateJson('package-lock.json', json => {
+  json.version = version;
+  if (json.packages?.['']) json.packages[''].version = version;
+});
+NODE
+}
+
+cleanup_on_error() {
+  local status=$?
+  if [[ "$status" -eq 0 || "$CLEANUP_ACTIVE" != true ]]; then
+    return
+  fi
+
+  trap - EXIT
+  set +e
+
+  echo ""
+  echo "Release failed; cleaning up..."
+
+  [[ -n "$CHROME_ZIP" ]] && rm -f "$CHROME_ZIP"
+  [[ -n "$FIREFOX_XPI" ]] && rm -f "$FIREFOX_XPI"
+  [[ -n "$UNSIGNED_FIREFOX_ZIP" ]] && rm -f "$UNSIGNED_FIREFOX_ZIP"
+  rm -rf web-ext-artifacts/
+
+  if [[ "$TAG_CREATED" == true ]]; then
+    if [[ "$RELEASE_CREATED" == true ]]; then
+      echo "Deleting draft release $TAG if it was created..."
+      gh release delete "$TAG" --repo natefinch/moxmox --yes --cleanup-tag >/dev/null 2>&1 || true
+    fi
+
+    echo "Removing local tag $TAG..."
+    git tag -d "$TAG" >/dev/null 2>&1 || true
+
+    echo "Removing remote tag $TAG if it was pushed..."
+    git push origin ":refs/tags/$TAG" >/dev/null 2>&1 || true
+  fi
+
+  if [[ "$RELEASE_COMMIT_CREATED" == true && "$MAIN_PUSHED" != true ]]; then
+    echo "Removing local release commit..."
+    git reset --mixed HEAD~1 >/dev/null 2>&1 || true
+    RELEASE_COMMIT_CREATED=false
+  fi
+
+  if [[ "$VERSION_FILES_UPDATED" == true ]]; then
+    echo "Restoring version files to $CURRENT..."
+    write_version_files "$CURRENT" >/dev/null || true
+  fi
+
+  if [[ "$MAIN_PUSHED" == true ]]; then
+    echo "Warning: main was already pushed before the failure; local version files were restored, but remote main may still contain the release commit."
+  fi
+
+  exit "$status"
+}
+
+CLEANUP_ACTIVE=true
+trap cleanup_on_error EXIT
+
 # --- Update version ---
 
 if [[ "$NO_BUMP" == true ]]; then
   echo "Skipping version update (--nobump)."
 else
   echo "Updating version to $VERSION..."
-
-  # Update manifests/base.json
-  node -e "
-    import { readFileSync, writeFileSync } from 'fs';
-    const json = JSON.parse(readFileSync('manifests/base.json', 'utf8'));
-    json.version = '${VERSION}';
-    writeFileSync('manifests/base.json', JSON.stringify(json, null, 2) + '\n');
-    console.log('  manifests/base.json ✓');
-  "
-
-  # Update package.json
-  node -e "
-    import { readFileSync, writeFileSync } from 'fs';
-    const json = JSON.parse(readFileSync('package.json', 'utf8'));
-    json.version = '${VERSION}';
-    writeFileSync('package.json', JSON.stringify(json, null, 2) + '\n');
-    console.log('  package.json ✓');
-  "
-
-  # Update package-lock.json if present
-  if [[ -f package-lock.json ]]; then
-    node -e "
-      import { readFileSync, writeFileSync } from 'fs';
-      const json = JSON.parse(readFileSync('package-lock.json', 'utf8'));
-      json.version = '${VERSION}';
-      if (json.packages?.['']) json.packages[''].version = '${VERSION}';
-      writeFileSync('package-lock.json', JSON.stringify(json, null, 2) + '\n');
-      console.log('  package-lock.json ✓');
-    "
-  fi
+  write_version_files "$VERSION"
+  VERSION_FILES_UPDATED=true
 fi
 
 # --- Build ---
@@ -184,24 +246,19 @@ echo "  $(du -h "$CHROME_ZIP" | cut -f1) $CHROME_ZIP"
 # --- Sign Firefox extension via AMO ---
 
 FIREFOX_XPI="moxmox-firefox-${TAG}.xpi"
+UNSIGNED_FIREFOX_ZIP="moxmox-firefox-unsigned-${TAG}.zip"
 
 echo "Signing Firefox extension via AMO (unlisted)..."
-npx web-ext sign \
-  --source-dir=dist/firefox/ \
-  --artifacts-dir=web-ext-artifacts/ \
-  --channel=unlisted \
-  --api-key="$AMO_JWT_ISSUER" \
-  --api-secret="$AMO_JWT_SECRET"
-
-# Find the signed .xpi and rename to our convention.
-SIGNED_XPI=$(find web-ext-artifacts/ -name '*.xpi' -print -quit)
-if [[ -z "$SIGNED_XPI" ]]; then
-  echo "Error: web-ext sign did not produce an .xpi file"
-  rm -rf web-ext-artifacts/
+(cd dist/firefox && COPYFILE_DISABLE=1 zip -r -X "../../$UNSIGNED_FIREFOX_ZIP" . -x '__MACOSX/*' '*/.*' '.*')
+if ! node scripts/sign-firefox.mjs \
+    --input "$UNSIGNED_FIREFOX_ZIP" \
+    --source-dir dist/firefox \
+    --output "$FIREFOX_XPI" \
+    --artifacts-dir web-ext-artifacts; then
+  rm -f "$UNSIGNED_FIREFOX_ZIP"
   exit 1
 fi
-mv "$SIGNED_XPI" "$FIREFOX_XPI"
-rm -rf web-ext-artifacts/
+rm "$UNSIGNED_FIREFOX_ZIP"
 echo "  $(du -h "$FIREFOX_XPI" | cut -f1) $FIREFOX_XPI"
 
 # --- Commit version bump & tag ---
@@ -212,15 +269,18 @@ else
   git add manifests/base.json package.json
   [[ -f package-lock.json ]] && git add package-lock.json
   git commit -m "Release $TAG"
+  RELEASE_COMMIT_CREATED=true
 fi
 git tag -a "$TAG" -m "Release $TAG"
+TAG_CREATED=true
 
 echo "Created tag $TAG"
 
 # --- Push tag and create draft release ---
 
 echo "Pushing tag to origin..."
-git push origin main "$TAG"
+git push origin "$TAG"
+TAG_PUSHED=true
 
 echo "Creating draft release on GitHub..."
 gh release create "$TAG" "$CHROME_ZIP" "$FIREFOX_XPI" \
@@ -241,10 +301,17 @@ gh release create "$TAG" "$CHROME_ZIP" "$FIREFOX_XPI" \
 3. Click the gear icon (⚙) → **Install Add-on From File…**
 4. Select the downloaded \`.xpi\` file" \
   --draft
+RELEASE_CREATED=true
+
+echo "Pushing main to origin..."
+git push origin main
+MAIN_PUSHED=true
 
 # --- Cleanup ---
 
 rm "$CHROME_ZIP" "$FIREFOX_XPI"
+CLEANUP_ACTIVE=false
+trap - EXIT
 
 echo ""
 echo "Done! Draft release $TAG created at:"
