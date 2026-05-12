@@ -112,25 +112,25 @@ new_sqlite_classes = ["Room"]
 
 1. **`default` (the Worker)**: Routes incoming requests.
    - `GET /` — health check.
-   - `GET /room/:roomId` — validates the room ID (`/^[a-zA-Z0-9_-]{1,64}$/`),
+   - `/room/:roomId` — validates the room ID (`/^[a-zA-Z0-9_-]{1,64}$/`),
      creates a DO stub via `env.ROOM.idFromName(roomId)`, and forwards the
      request to the DO.
 
 2. **`Room` class (the Durable Object)**: Manages WebSocket connections for one
    room.
-   - `fetch()` — accepts WebSocket upgrades, calls
-     `this.state.acceptWebSocket()`, sends system messages about join/user
-     count.
-   - `webSocketMessage()` — validates incoming messages (must be JSON, ≤1KB,
-     known type), then relays to all other connections.
+   - `fetch()` — accepts WebSocket upgrades, creates Traditional rooms with
+     `POST /room/:roomId`, and returns room metadata with `GET /room/:roomId`.
+   - `webSocketMessage()` — validates incoming messages (must be JSON, ≤16KB,
+     known type), stamps relayed messages with sender identity, then relays to
+     other authenticated connections.
    - `webSocketClose()` — notifies remaining users that someone left.
    - `webSocketError()` — closes the socket cleanly.
 
 ### Extension Components
 
-**`src/popup.js`** — Opens a WebSocket directly from the popup page to
-`wss://moxmox-relay.nate-finch.workers.dev/room/<roomId>`. The connection
-exists only while the popup is open (MV3 popups close when they lose focus).
+**`src/content.js`** — Opens a WebSocket from the Moxfield playtest page to
+`wss://moxmox-relay.nate-finch.workers.dev/room/<roomId>`, creates Traditional
+rooms over HTTPS, and queries room metadata for the Join dialog.
 
 **`manifests/base.json`** — Includes `host_permissions` for `*.workers.dev` so
 the extension can connect to the relay server.
@@ -143,17 +143,22 @@ All messages are JSON strings sent over the WebSocket.
 
 | Type | Format | Description |
 |------|--------|-------------|
-| `drawCard` | `{"type":"drawCard"}` | Player draws a card |
-| `discard` | `{"type":"discard","cardName":"..."}` | Player discards a named card |
+| `join` | `{"type":"join","playerKey":"...","username":"...","gameType":"shared"}` | Authenticate and reserve/reuse a room seat |
+| `game-init` / `game-ready` / `game-start` | Shared Deck setup payloads | Coordinate the two-player shared-deck opening flow |
+| `zone-sync` | Zone, battlefield, highlight, reveal, or zone-view payload | Sync Shared Deck card state, targeted hand reveal, or Traditional graveyard/exile view requests |
+| `life-sync` | `{"type":"life-sync","life":40}` | Sync a player's current life total |
+| `ping` | `{"type":"ping","t":123}` | Keepalive heartbeat; server replies with `pong` and does not relay |
 
 **Server → Client (system messages, not relayed):**
 
 | Type | Format | Description |
 |------|--------|-------------|
-| `system` | `{"type":"system","text":"..."}` | Join/leave notifications with user count |
+| `system` | `{"type":"system","text":"...","gameType":"traditional","players":[...]}` | Join/leave notifications with room metadata and player list |
 
 The server validates that relayed messages have a known `type` and are under
-1KB. Unknown types are silently dropped.
+16KB. Unknown types are silently dropped. Traditional hand reveal and
+graveyard/exile view messages use a `targetId`; the Durable Object routes those
+messages only to the chosen player.
 
 ### Message Flow
 

@@ -2,11 +2,14 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   generateRoomId,
+  generateTraditionalRoomCode,
+  isTraditionalRoomCode,
   buildShareUrl,
   extractRoomId,
   stripRoomParam,
   isGoldfishPage,
   ROOM_ID_LENGTH,
+  TRADITIONAL_ROOM_CODE_LENGTH,
 } from '../src/shared/room.js';
 
 describe('generateRoomId', () => {
@@ -36,6 +39,35 @@ describe('generateRoomId', () => {
       const id = generateRoomId();
       assert.match(id, /^[a-zA-Z0-9_-]{1,64}$/);
     }
+  });
+});
+
+describe('generateTraditionalRoomCode', () => {
+  it('produces a short uppercase code of the correct length', () => {
+    const id = generateTraditionalRoomCode();
+    assert.equal(typeof id, 'string');
+    assert.equal(id.length, TRADITIONAL_ROOM_CODE_LENGTH);
+    assert.equal(isTraditionalRoomCode(id), true);
+  });
+
+  it('omits ambiguous characters', () => {
+    for (let i = 0; i < 50; i++) {
+      const id = generateTraditionalRoomCode();
+      assert.match(id, /^[A-HJ-NP-Z2-9]+$/);
+      assert.doesNotMatch(id, /[IO01]/);
+    }
+  });
+});
+
+describe('isTraditionalRoomCode', () => {
+  it('accepts generated Traditional room codes', () => {
+    assert.equal(isTraditionalRoomCode(generateTraditionalRoomCode()), true);
+  });
+
+  it('rejects wrong length, lowercase, and ambiguous characters', () => {
+    assert.equal(isTraditionalRoomCode('ABC12'), false);
+    assert.equal(isTraditionalRoomCode('abcdef'), false);
+    assert.equal(isTraditionalRoomCode('ABCI2O'), false);
   });
 });
 

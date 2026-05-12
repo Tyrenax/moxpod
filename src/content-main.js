@@ -130,8 +130,12 @@ async function dispatch(action, params) {
     case 'sync-move': return await withSync(() => syncMoveBetweenZones(params.fromZone, params.toZone, params.syncId));
     case 'sync-update-state': return await withSync(() => syncUpdateCardState(params.syncId, params.updates));
     case 'get-battlefield-size': return getBattlefieldSize();
+    case 'get-life': return { life: getInstance().state.life };
+    case 'get-hand-cards': return getHandCards();
+    case 'get-zone-cards': return getZoneCards(params.zone);
     case 'apply-remote-highlight': return applyRemoteHighlight(params.syncIds);
     case 'inject-divider': return injectBattlefieldDivider();
+    case 'discard-save-state': return discardSaveState();
     default: return { error: `Unknown action: ${action}` };
   }
 }
@@ -197,6 +201,20 @@ function setupEventForwarding() {
       }
     } catch { /* controller not ready */ }
   }, 200);
+
+  // Detect life changes via componentDidUpdate (catches all state updates).
+  const inst = getInstance();
+  const originalDidUpdate = inst.componentDidUpdate;
+  inst.componentDidUpdate = function (prevProps, prevState, snapshot) {
+    if (typeof originalDidUpdate === 'function') {
+      originalDidUpdate.call(this, prevProps, prevState, snapshot);
+    }
+    if (prevState?.life !== undefined && prevState.life !== this.state.life) {
+      if (syncDepth === 0) {
+        post({ type: 'game-event', event: { type: 'life:changed', to: this.state.life } });
+      }
+    }
+  };
 }
 
 /** Strip non-cloneable / oversized fields from card data before posting. */
@@ -267,6 +285,26 @@ function applyRemoteHighlight(syncIds) {
 }
 
 // ── Game operations ─────────────────────────────────────────────────
+
+function getHandCards() {
+  return getZoneCards('hand');
+}
+
+function getZoneCards(zone) {
+  if (!['hand', 'graveyard', 'exile'].includes(zone)) {
+    return { error: `Unsupported zone: ${zone}` };
+  }
+  const cards = getInstance().state.zones[zone] || [];
+  return {
+    cards: cards.map(c => ({
+      name: c.name,
+      set: c.set,
+      cn: c.cn,
+      layout: c.layout,
+      card_faces: c.card_faces,
+    })),
+  };
+}
 
 function setState(zoneUpdates) {
   return new Promise((resolve) => {
@@ -509,6 +547,24 @@ function injectBattlefieldDivider() {
   container.appendChild(line);
 
   return { ok: true };
+}
+
+/**
+ * Dismiss Moxfield's "Save State Found" dialog by calling the
+ * component's handleDiscardSaveState method.
+ */
+function discardSaveState() {
+  const inst = getInstance();
+  if (typeof inst.handleDiscardSaveState === 'function') {
+    inst.handleDiscardSaveState();
+    return { ok: true };
+  }
+  // Fallback: close the modal via state if the method isn't available.
+  if (inst.state.isSaveStateModalOpen) {
+    inst.setState({ isSaveStateModalOpen: false });
+    return { ok: true, fallback: true };
+  }
+  return { ok: true, noDialog: true };
 }
 
 /** Assign a unique syncId to every card in a zone (if not already set). */

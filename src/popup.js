@@ -8,15 +8,17 @@
 document.addEventListener('DOMContentLoaded', async () => {
   const contentEl = document.getElementById('content');
 
+  // Always show username section at the top.
+  await renderUsernameSection(contentEl);
+
   // Query the active tab's content script for initial state.
   const state = await queryContentScript();
 
   if (!state || !state.isGoldfish) {
-    contentEl.innerHTML = `
-      <div class="not-playtest">
-        Navigate to a Moxfield playtest page<br>to use MoxMox.
-      </div>
-    `;
+    const msg = document.createElement('div');
+    msg.className = 'not-playtest';
+    msg.innerHTML = 'Navigate to a Moxfield playtest page<br>to use MoxMox.';
+    contentEl.appendChild(msg);
     return;
   }
 
@@ -97,6 +99,19 @@ function updatePanel(state) {
   const roleText = state.role
     ? state.role.charAt(0).toUpperCase() + state.role.slice(1)
     : 'Not connected';
+  const gameTypeText = state.gameType === 'traditional'
+    ? 'Traditional'
+    : state.gameType === 'shared'
+      ? 'Shared Deck'
+      : 'Not selected';
+  const players = state.players || [];
+  const playerRows = players.map(player => `
+    <div class="status-row">
+      <span class="status-label">${escapeHtml(player.username || 'Player')}</span>
+      <span class="dot ${player.connected === false ? '' : 'green'}"></span>
+      <span class="status-value">${player.life != null ? `Life ${player.life}` : statusText(player.connected === false ? 'disconnected' : 'connected')}</span>
+    </div>
+  `).join('');
 
   panelEl.innerHTML = `
     <div class="status-row">
@@ -113,6 +128,18 @@ function updatePanel(state) {
       <span class="status-label">Role</span>
       <span class="status-value">${roleText}</span>
     </div>
+    <div class="status-row">
+      <span class="status-label">Game</span>
+      <span class="status-value">${gameTypeText}</span>
+    </div>
+    ${
+      state.maxPlayers
+        ? `<div class="status-row">
+             <span class="status-label">Max Players</span>
+             <span class="status-value">${state.maxPlayers}</span>
+           </div>`
+        : ''
+    }
     ${
       state.roomId
         ? `<div class="status-row">
@@ -121,7 +148,18 @@ function updatePanel(state) {
            </div>`
         : ''
     }
+    ${playerRows}
   `;
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (ch) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  }[ch]));
 }
 
 function appendLogEntries(entries, fromIndex) {
@@ -154,4 +192,62 @@ function statusText(status) {
   if (status === 'connected') return 'Connected';
   if (status === 'connecting') return 'Connecting…';
   return 'Disconnected';
+}
+
+// ── Username ────────────────────────────────────────────────────────
+
+async function renderUsernameSection(container) {
+  const section = document.createElement('div');
+  section.className = 'username-section';
+
+  const label = document.createElement('span');
+  label.className = 'section-label';
+  label.textContent = 'Username';
+  section.appendChild(label);
+
+  const row = document.createElement('div');
+  row.className = 'username-row';
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.placeholder = 'Enter your name';
+  input.maxLength = 30;
+
+  const saveBtn = document.createElement('button');
+  saveBtn.textContent = 'Save';
+
+  row.appendChild(input);
+  row.appendChild(saveBtn);
+  section.appendChild(row);
+
+  const feedback = document.createElement('div');
+  feedback.className = 'username-saved';
+  section.appendChild(feedback);
+
+  container.appendChild(section);
+
+  // Load saved username.
+  const stored = await chrome.storage.local.get('moxmox_username');
+  if (stored.moxmox_username) {
+    input.value = stored.moxmox_username;
+  }
+
+  // Save on click or Enter.
+  async function save() {
+    const name = input.value.trim();
+    if (!name) {
+      feedback.textContent = '⚠️ Enter a username';
+      feedback.style.color = '#e53935';
+      return;
+    }
+    await chrome.storage.local.set({ moxmox_username: name });
+    feedback.textContent = '✓ Saved';
+    feedback.style.color = '#4caf50';
+    setTimeout(() => { feedback.textContent = ''; }, 2000);
+  }
+
+  saveBtn.addEventListener('click', save);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') save();
+  });
 }

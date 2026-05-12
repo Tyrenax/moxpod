@@ -5,6 +5,8 @@
 
 import {
   generateRoomId,
+  generateTraditionalRoomCode,
+  isTraditionalRoomCode,
   buildShareUrl,
   extractRoomId,
   stripRoomParam,
@@ -12,11 +14,17 @@ import {
 } from './shared/room.js';
 
 const WS_URL = 'wss://moxmox-relay.nate-finch.workers.dev';
+const HTTP_URL = WS_URL.replace(/^wss:/, 'https:').replace(/^ws:/, 'http:');
 const SESSION_KEY = 'moxmox_room';
 const SESSION_ROLE_KEY = 'moxmox_role';
 const SESSION_PLAYER_KEY = 'moxmox_player_key';
+const SESSION_GAME_TYPE_KEY = 'moxmox_game_type';
 const MSG_TAG = 'moxmox';
 const SHARED_ZONES = new Set(['library', 'graveyard', 'exile']);
+const GAME_TYPE_SHARED = 'shared';
+const GAME_TYPE_TRADITIONAL = 'traditional';
+const WS_HEARTBEAT_MS = 25000;
+const WS_RECONNECT_MS = 2000;
 
 // ── State ───────────────────────────────────────────────────────────
 
@@ -24,14 +32,30 @@ let ws = null;
 let currentRoomId = null;
 let localDot = null;
 let remoteDot = null;
+let localNameEl = null;
+let playerGridEl = null;
+let remotePlayerRow = null;
+let remoteNameEl = null;
+let localLifeEl = null;
+let remoteLifeEl = null;
+let menuEl = null;
 let popupBackdrop = null;
 let role = null;         // 'host' or 'guest'
+let gameType = null;     // 'shared' or 'traditional'
+let maxPlayers = null;
+let localPlayerId = null;
 let localStatus = 'disconnected';
 let remoteStatus = 'disconnected';
+let remoteUsername = null;
+let remotePlayers = new Map();
 let gameStarted = false;   // true only after Start button is clicked (sync active)
 let gameSetupDone = false; // true once the game-start handshake completes
 let gameModal = null;
 let playerKey = null;      // unique secret for this tab's player slot
+let traditionalLifeInitialized = false;
+let heartbeatTimer = null;
+let reconnectTimer = null;
+let intentionalDisconnect = false;
 const messageLog = [];
 
 /** Generate a unique playerKey for this tab. */
@@ -51,6 +75,40 @@ function getOrCreatePlayerKey() {
   return playerKey;
 }
 
+function ensureUsername(onComplete) {
+  chrome.storage.local.get('moxmox_username', (result) => {
+    const username = result.moxmox_username?.trim();
+    if (!username) {
+      showUsernamePrompt(() => {
+        refreshLocalUsername();
+        onComplete();
+      });
+      return;
+    }
+    onComplete();
+  });
+}
+
+function resetRoomState(nextGameType) {
+  intentionalDisconnect = true;
+  stopHeartbeat();
+  clearReconnectTimer();
+  if (ws) {
+    try { ws.close(); } catch (_) {}
+    ws = null;
+  }
+  playerKey = null;
+  localPlayerId = null;
+  maxPlayers = null;
+  remotePlayers = new Map();
+  traditionalLifeInitialized = false;
+  gameStarted = false;
+  gameSetupDone = false;
+  setRemotePlayersDisplay([]);
+  sessionStorage.removeItem(SESSION_PLAYER_KEY);
+  gameType = nextGameType;
+}
+
 // ── Entry point ─────────────────────────────────────────────────────
 
 if (isGoldfishPage(window.location.href)) {
@@ -60,8 +118,12 @@ if (isGoldfishPage(window.location.href)) {
 function init() {
   let roomToJoin = extractRoomId(window.location.href);
   let initialRole = null;
+  let initialGameType = null;
   if (roomToJoin) {
     initialRole = 'guest';
+    initialGameType = isTraditionalRoomCode(roomToJoin)
+      ? GAME_TYPE_TRADITIONAL
+      : GAME_TYPE_SHARED;
     // Fresh key for the new guest tab.
     playerKey = null;
     sessionStorage.removeItem(SESSION_PLAYER_KEY);
@@ -69,6 +131,7 @@ function init() {
   } else {
     roomToJoin = sessionStorage.getItem(SESSION_KEY) || null;
     initialRole = sessionStorage.getItem(SESSION_ROLE_KEY) || null;
+    initialGameType = sessionStorage.getItem(SESSION_GAME_TYPE_KEY) || null;
   }
 
   chrome.runtime.onMessage.addListener(handlePopupMessage);
@@ -79,8 +142,25 @@ function init() {
   waitForNavbar((navbar) => {
     injectButton(navbar);
     if (roomToJoin) {
-      role = initialRole;
-      connectToRoom(roomToJoin);
+      const savedRoomToJoin = roomToJoin;
+      const savedRole = initialRole;
+      const savedGameType = initialGameType || GAME_TYPE_SHARED;
+      // Check username before connecting (guest or reconnect).
+      chrome.storage.local.get('moxmox_username', (result) => {
+        const username = result.moxmox_username?.trim();
+        if (!username) {
+          showUsernamePrompt(() => {
+            refreshLocalUsername();
+            role = savedRole;
+            gameType = savedGameType;
+            connectToRoom(savedRoomToJoin);
+          });
+          return;
+        }
+        role = savedRole;
+        gameType = savedGameType;
+        connectToRoom(savedRoomToJoin);
+      });
     }
   });
 }
@@ -152,91 +232,594 @@ function findZoomElement() {
 // ── Button injection ────────────────────────────────────────────────
 
 function injectButton(zoomElement) {
-  const btn = document.createElement('button');
-  btn.className = 'moxmox-play-btn';
-  btn.type = 'button';
+  const widget = document.createElement('div');
+  widget.className = 'moxmox-widget';
 
-  const shareIcon = document.createElement('span');
-  shareIcon.className = 'moxmox-icon-share';
+  // ── Info column (3 lines) ──
+  const info = document.createElement('div');
+  info.className = 'moxmox-widget-info';
 
-  const label = document.createElement('span');
-  label.textContent = 'Play Together';
+  // Line 1: Title row with hamburger menu
+  const title = document.createElement('div');
+  title.className = 'moxmox-widget-title';
 
-  const statusContainer = document.createElement('span');
-  statusContainer.className = 'moxmox-status-dots';
+  const titleText = document.createElement('span');
+  titleText.textContent = 'MoxMox — Play Together';
+
+  const menuWrapper = document.createElement('span');
+  menuWrapper.style.position = 'relative';
+
+  const menuBtn = document.createElement('button');
+  menuBtn.className = 'moxmox-menu-btn';
+  menuBtn.textContent = '☰';
+  menuBtn.title = 'Menu';
+  menuBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleMenu(menuWrapper);
+  });
+
+  menuWrapper.appendChild(menuBtn);
+  title.appendChild(titleText);
+  title.appendChild(menuWrapper);
+
+  // Line 2: Local player
+  const localRow = document.createElement('div');
+  localRow.className = 'moxmox-widget-player';
 
   localDot = document.createElement('span');
   localDot.className = 'moxmox-status-dot';
   localDot.title = 'You: Disconnected';
 
-  remoteDot = document.createElement('span');
-  remoteDot.className = 'moxmox-status-dot';
-  remoteDot.title = 'Opponent: Disconnected';
+  localNameEl = document.createElement('span');
+  localNameEl.className = 'moxmox-player-name';
 
-  statusContainer.appendChild(localDot);
-  statusContainer.appendChild(remoteDot);
+  localLifeEl = document.createElement('span');
+  localLifeEl.className = 'moxmox-life';
+  localLifeEl.textContent = '';
 
-  btn.appendChild(shareIcon);
-  btn.appendChild(label);
-  btn.appendChild(statusContainer);
-  btn.addEventListener('click', handlePlayButtonClick);
+  localRow.appendChild(localDot);
+  localRow.appendChild(localNameEl);
+  localRow.appendChild(localLifeEl);
+
+  // Load and display username (or show "Set Username" button).
+  refreshLocalUsername();
+
+  playerGridEl = document.createElement('div');
+  playerGridEl.className = 'moxmox-player-grid';
+  playerGridEl.appendChild(localRow);
+
+  // Remote players (hidden until connected)
+  remotePlayerRow = document.createElement('div');
+  remotePlayerRow.className = 'moxmox-remote-players';
+  remotePlayerRow.style.display = 'none';
+  playerGridEl.appendChild(remotePlayerRow);
+
+  info.appendChild(title);
+  info.appendChild(playerGridEl);
+
+  widget.appendChild(info);
+
+  // Close menu on outside click.
+  document.addEventListener('click', () => {
+    if (menuEl) { menuEl.remove(); menuEl = null; }
+  });
 
   const li = document.createElement('li');
-  li.appendChild(btn);
+  li.appendChild(widget);
   const parentList = zoomElement.parentElement;
-  if (parentList) parentList.insertBefore(li, zoomElement);
+  if (parentList) {
+    // Ensure the zoom controls stay vertically centered despite our taller widget.
+    parentList.style.alignItems = 'center';
+    parentList.insertBefore(li, zoomElement);
+  }
+}
+
+function refreshLocalUsername() {
+  if (!localNameEl) return;
+  chrome.storage.local.get('moxmox_username', (result) => {
+    const name = result.moxmox_username?.trim();
+    localNameEl.innerHTML = '';
+    if (name) {
+      localNameEl.textContent = name;
+    } else {
+      const setBtn = document.createElement('button');
+      setBtn.className = 'moxmox-set-username-btn';
+      setBtn.textContent = 'Set Username';
+      setBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        showUsernamePrompt(() => refreshLocalUsername());
+      });
+      localNameEl.appendChild(setBtn);
+    }
+  });
+}
+
+function setRemotePlayerDisplay(name, id = 'opponent') {
+  remoteUsername = name || null;
+  if (!name) {
+    remotePlayers.delete(id);
+  } else {
+    remotePlayers.set(id, { id, username: name, connected: true });
+  }
+  setRemotePlayersDisplay([...remotePlayers.values()]);
+}
+
+function updateRemotePlayersFromList(players = []) {
+  const next = new Map();
+  for (const player of players) {
+    if (!player?.id || player.id === localPlayerId) continue;
+    const existing = remotePlayers.get(player.id) || {};
+    next.set(player.id, {
+      ...existing,
+      id: player.id,
+      username: player.username || existing.username || 'Anonymous',
+      connected: player.connected !== false,
+    });
+  }
+  remotePlayers = next;
+  setRemotePlayersDisplay([...remotePlayers.values()]);
+}
+
+function setRemotePlayersDisplay(players) {
+  if (!remotePlayerRow) return;
+  remotePlayerRow.innerHTML = '';
+  remotePlayerRow.style.display = players.length > 0 ? 'contents' : 'none';
+  if (playerGridEl) {
+    playerGridEl.classList.toggle('multi', players.length + 1 > 2);
+  }
+
+  for (const player of players) {
+    const row = document.createElement('div');
+    row.className = 'moxmox-widget-player';
+
+    const dot = document.createElement('span');
+    dot.className = 'moxmox-status-dot';
+    if (player.connected !== false) dot.classList.add('connected');
+    dot.title = `${player.username || 'Opponent'}: ${player.connected === false ? 'Disconnected' : 'Connected'}`;
+
+    const nameEl = document.createElement('span');
+    nameEl.className = 'moxmox-player-name';
+
+    const nameBtn = document.createElement('button');
+    nameBtn.className = 'moxmox-remote-name-btn';
+    nameBtn.textContent = player.username || 'Anonymous';
+    nameBtn.title = 'View player options';
+    nameBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleRemoteMenu(nameEl, player.id);
+    });
+    nameEl.appendChild(nameBtn);
+
+    const lifeEl = document.createElement('span');
+    lifeEl.className = 'moxmox-life';
+    lifeEl.innerHTML = player.life != null
+      ? `❤️ <span class="moxmox-life-value">${player.life}</span>` : '';
+
+    row.appendChild(dot);
+    row.appendChild(nameEl);
+    row.appendChild(lifeEl);
+    remotePlayerRow.appendChild(row);
+  }
+}
+
+let remoteMenuEl = null;
+
+function toggleRemoteMenu(anchor, targetId = null) {
+  if (remoteMenuEl) {
+    remoteMenuEl.remove();
+    remoteMenuEl = null;
+    return;
+  }
+
+  remoteMenuEl = document.createElement('div');
+  remoteMenuEl.className = 'moxmox-menu moxmox-remote-menu';
+  remoteMenuEl.style.position = 'fixed';
+
+  const showHandItem = document.createElement('button');
+  showHandItem.className = 'moxmox-menu-item';
+  showHandItem.textContent = 'Show Hand';
+  showHandItem.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    remoteMenuEl.remove();
+    remoteMenuEl = null;
+    await revealHandToOpponent(targetId);
+  });
+
+  remoteMenuEl.appendChild(showHandItem);
+
+  if (gameType === GAME_TYPE_TRADITIONAL && targetId) {
+    const graveyardItem = document.createElement('button');
+    graveyardItem.className = 'moxmox-menu-item';
+    graveyardItem.textContent = 'View Graveyard';
+    graveyardItem.addEventListener('click', (e) => {
+      e.stopPropagation();
+      remoteMenuEl.remove();
+      remoteMenuEl = null;
+      requestOpponentZone(targetId, 'graveyard');
+    });
+
+    const exileItem = document.createElement('button');
+    exileItem.className = 'moxmox-menu-item';
+    exileItem.textContent = 'View Exile';
+    exileItem.addEventListener('click', (e) => {
+      e.stopPropagation();
+      remoteMenuEl.remove();
+      remoteMenuEl = null;
+      requestOpponentZone(targetId, 'exile');
+    });
+
+    remoteMenuEl.appendChild(graveyardItem);
+    remoteMenuEl.appendChild(exileItem);
+  }
+
+  // Position below the anchor element.
+  const rect = anchor.getBoundingClientRect();
+  remoteMenuEl.style.top = `${rect.bottom + 4}px`;
+  remoteMenuEl.style.left = `${rect.left}px`;
+
+  document.body.appendChild(remoteMenuEl);
+
+  // Close on next click anywhere (delayed so the current click doesn't close it).
+  requestAnimationFrame(() => {
+    const closeHandler = (e) => {
+      if (remoteMenuEl && !remoteMenuEl.contains(e.target)) {
+        remoteMenuEl.remove();
+        remoteMenuEl = null;
+      }
+      document.removeEventListener('click', closeHandler, true);
+    };
+    document.addEventListener('click', closeHandler, true);
+  });
+}
+
+/** Send our hand contents to the opponent for viewing. */
+async function revealHandToOpponent(targetId = null) {
+  const result = await sendCmd('get-hand-cards');
+  const cards = result?.cards || [];
+  sendWs({
+    type: 'zone-sync', action: 'reveal-hand',
+    targetId: gameType === GAME_TYPE_TRADITIONAL ? targetId : undefined,
+    cards: cards.map(c => ({
+      name: c.name,
+      set: c.set,
+      cn: c.cn,
+      layout: c.layout,
+      card_faces: c.card_faces,
+    })),
+    username: await getLocalUsername(),
+  });
+  const target = targetId ? ` to ${remotePlayers.get(targetId)?.username || targetId}` : '';
+  addLog('out', `SEND: revealed hand${target} (${cards.length} cards)`);
+}
+
+function requestOpponentZone(targetId, zone) {
+  const player = remotePlayers.get(targetId);
+  sendWs({
+    type: 'zone-sync',
+    action: 'request-zone-view',
+    targetId,
+    zone,
+  });
+  addLog('out', `SEND: requested ${player?.username || targetId}'s ${zone}`);
+}
+
+async function getLocalUsername() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get('moxmox_username', (result) => {
+      resolve(result.moxmox_username || 'Anonymous');
+    });
+  });
+}
+
+/** Show the opponent's revealed hand as an overlay at the bottom. */
+async function showRevealedHand(cards, username) {
+  await showCardOverlay({
+    title: `${username}'s Hand (${cards.length})`,
+    cards,
+    mode: 'hand',
+  });
+}
+
+async function showZoneViewer(cards, username, zone) {
+  const label = zone === 'graveyard' ? 'Graveyard' : 'Exile';
+  await showCardOverlay({
+    title: `${username}'s ${label} (${cards.length})`,
+    cards,
+    mode: 'zone',
+  });
+}
+
+async function showCardOverlay({ title, cards, mode }) {
+  // Remove existing reveal overlay.
+  const existing = document.getElementById('moxmox-hand-reveal');
+  if (existing) existing.remove();
+
+  // Get card dimensions from Moxfield to match sizing.
+  const size = await sendCmd('get-battlefield-size');
+  const cardHeight = size.cardH || 180;
+
+  const overlay = document.createElement('div');
+  overlay.id = 'moxmox-hand-reveal';
+  overlay.className = mode === 'zone'
+    ? 'moxmox-hand-reveal moxmox-zone-viewer'
+    : 'moxmox-hand-reveal';
+
+  const header = document.createElement('div');
+  header.className = 'moxmox-hand-reveal-header';
+
+  const titleEl = document.createElement('span');
+  titleEl.textContent = title;
+
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'moxmox-hand-reveal-close';
+  closeBtn.textContent = '✕';
+  closeBtn.addEventListener('click', () => overlay.remove());
+
+  header.appendChild(titleEl);
+  header.appendChild(closeBtn);
+  overlay.appendChild(header);
+  if (mode === 'zone') {
+    makeZoneOverlayDraggable(overlay, header);
+  }
+
+  const cardList = document.createElement('div');
+  cardList.className = mode === 'zone'
+    ? 'moxmox-zone-viewer-cards'
+    : 'moxmox-hand-reveal-cards';
+
+  for (const card of cards) {
+    const cardEl = document.createElement('div');
+    cardEl.className = mode === 'zone'
+      ? 'moxmox-zone-viewer-card'
+      : 'moxmox-hand-reveal-card';
+
+    const img = createCardImage(card);
+    img.style.height = `${cardHeight}px`;
+    if (mode === 'zone') {
+      cardEl.style.setProperty('--moxmox-card-height', `${cardHeight}px`);
+      cardEl.style.setProperty('--moxmox-card-peek', `${Math.max(24, Math.round(cardHeight * 0.2))}px`);
+    }
+
+    cardEl.appendChild(img);
+    cardList.appendChild(cardEl);
+  }
+
+  overlay.appendChild(cardList);
+  document.body.appendChild(overlay);
+}
+
+function makeZoneOverlayDraggable(overlay, handle) {
+  handle.classList.add('moxmox-zone-viewer-drag-handle');
+
+  handle.addEventListener('mousedown', (e) => {
+    if (e.button !== 0 || e.target.closest('button')) return;
+    e.preventDefault();
+
+    const rect = overlay.getBoundingClientRect();
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const startLeft = rect.left;
+    const startTop = rect.top;
+
+    overlay.style.left = `${rect.left}px`;
+    overlay.style.top = `${rect.top}px`;
+    overlay.style.right = 'auto';
+    overlay.style.bottom = 'auto';
+    overlay.style.width = `${rect.width}px`;
+    overlay.style.height = `${rect.height}px`;
+
+    const move = (moveEvent) => {
+      const nextLeft = Math.max(0, Math.min(
+        window.innerWidth - overlay.offsetWidth,
+        startLeft + moveEvent.clientX - startX,
+      ));
+      const nextTop = Math.max(0, Math.min(
+        window.innerHeight - overlay.offsetHeight,
+        startTop + moveEvent.clientY - startY,
+      ));
+      overlay.style.left = `${nextLeft}px`;
+      overlay.style.top = `${nextTop}px`;
+    };
+
+    const stop = () => {
+      document.removeEventListener('mousemove', move);
+      document.removeEventListener('mouseup', stop);
+    };
+
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', stop);
+  });
+}
+
+function createCardImage(card) {
+  const img = document.createElement('img');
+  const face = card.card_faces?.[0];
+  if (card.layout === 'transform' || card.layout === 'modal_dfc') {
+    img.src = face?.image_uris?.normal ||
+      `https://api.scryfall.com/cards/${card.set}/${card.cn}?format=image&face=front`;
+  } else {
+    img.src = `https://api.scryfall.com/cards/${card.set}/${card.cn}?format=image`;
+  }
+  img.alt = card.name;
+  img.loading = 'lazy';
+  return img;
+}
+
+function updateLocalLife(life) {
+  if (localLifeEl) {
+    localLifeEl.innerHTML = life != null
+      ? `❤️ <span class="moxmox-life-value">${life}</span>` : '';
+  }
+}
+
+function updateRemoteLife(life, senderId = null, username = null) {
+  const id = senderId || 'opponent';
+  const existing = remotePlayers.get(id) || { id, username: username || remoteUsername || 'Opponent' };
+  remotePlayers.set(id, {
+    ...existing,
+    username: username || existing.username,
+    connected: true,
+    life,
+  });
+  setRemotePlayersDisplay([...remotePlayers.values()]);
+}
+
+function toggleMenu(wrapper) {
+  if (menuEl) {
+    menuEl.remove();
+    menuEl = null;
+    return;
+  }
+
+  menuEl = document.createElement('div');
+  menuEl.className = 'moxmox-menu';
+
+  const inviteItem = document.createElement('button');
+  inviteItem.className = 'moxmox-menu-item';
+  inviteItem.textContent = 'Invite...';
+  inviteItem.addEventListener('click', (e) => {
+    e.stopPropagation();
+    menuEl.remove();
+    menuEl = null;
+    handleInviteButtonClick();
+  });
+
+  const joinItem = document.createElement('button');
+  joinItem.className = 'moxmox-menu-item';
+  joinItem.textContent = 'Join...';
+  joinItem.addEventListener('click', (e) => {
+    e.stopPropagation();
+    menuEl.remove();
+    menuEl = null;
+    showTraditionalJoinPopup();
+  });
+
+  menuEl.appendChild(inviteItem);
+  menuEl.appendChild(joinItem);
+
+  if (currentRoomId) {
+    const leaveItem = document.createElement('button');
+    leaveItem.className = 'moxmox-menu-item';
+    leaveItem.textContent = 'Leave Game';
+    leaveItem.addEventListener('click', (e) => {
+      e.stopPropagation();
+      menuEl.remove();
+      menuEl = null;
+      showLeaveGamePrompt();
+    });
+    menuEl.appendChild(leaveItem);
+  }
+
+  wrapper.appendChild(menuEl);
 }
 
 // ── Button click handler ────────────────────────────────────────────
 
-function handlePlayButtonClick() {
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    showSharePopup();
+function handleInviteButtonClick() {
+  if (currentRoomId && gameType === GAME_TYPE_TRADITIONAL) {
+    showCurrentTraditionalRoomCodePopup();
     return;
   }
-  role = 'host';
-  // Generate a fresh player key for the new room.
-  playerKey = null;
-  sessionStorage.removeItem(SESSION_PLAYER_KEY);
-  const roomId = generateRoomId();
-  connectToRoom(roomId);
-  showSharePopup();
+  if (currentRoomId && gameType === GAME_TYPE_SHARED) {
+    showCurrentSharedInvitePopup();
+    return;
+  }
+  ensureUsername(() => showInvitePopup());
 }
 
 // ── WebSocket connection ────────────────────────────────────────────
 
-function connectToRoom(roomId) {
+function connectToRoom(roomId, options = {}) {
+  clearReconnectTimer();
+  stopHeartbeat();
+  intentionalDisconnect = false;
+  if (options.gameType) gameType = options.gameType;
+  if (!gameType) gameType = GAME_TYPE_SHARED;
+  if (options.maxPlayers) maxPlayers = options.maxPlayers;
+
   currentRoomId = roomId;
   sessionStorage.setItem(SESSION_KEY, roomId);
   sessionStorage.setItem(SESSION_ROLE_KEY, role);
+  sessionStorage.setItem(SESSION_GAME_TYPE_KEY, gameType);
   setLocalStatus('connecting');
   setRemoteStatus('disconnected');
-  addLog('out', `Connecting to room ${roomId}…`);
+  addLog('out', `Connecting to ${gameType} room ${roomId}…`);
 
   const url = `${WS_URL}/room/${encodeURIComponent(roomId)}`;
-  ws = new WebSocket(url);
+  if (ws) {
+    try { ws.close(); } catch (_) {}
+  }
+  const socket = new WebSocket(url);
+  ws = socket;
 
-  ws.addEventListener('open', () => {
+  socket.addEventListener('open', () => {
     setLocalStatus('connected');
     addLog('in', 'WebSocket connected');
-    sendWs({ type: 'join', playerKey: getOrCreatePlayerKey() });
+    startHeartbeat();
+    // Include username in join message so the other player can see it.
+    chrome.storage.local.get('moxmox_username', (result) => {
+      sendWs({
+        type: 'join',
+        playerKey: getOrCreatePlayerKey(),
+        username: result.moxmox_username || 'Anonymous',
+        gameType,
+        maxPlayers,
+      });
+    });
   });
 
-  ws.addEventListener('message', (event) => {
+  socket.addEventListener('message', (event) => {
     handleServerMessage(event.data);
   });
 
-  ws.addEventListener('close', () => {
+  socket.addEventListener('close', () => {
+    if (ws !== socket) return;
+    stopHeartbeat();
     setLocalStatus('disconnected');
     setRemoteStatus('disconnected');
     addLog('in', 'WebSocket disconnected');
     ws = null;
+    scheduleReconnect();
   });
 
-  ws.addEventListener('error', () => {
+  socket.addEventListener('error', () => {
+    if (ws !== socket) return;
     setLocalStatus('disconnected');
     addLog('in', '⚠️ WebSocket error');
   });
+}
+
+function startHeartbeat() {
+  stopHeartbeat();
+  heartbeatTimer = setInterval(() => {
+    if (ws?.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'ping', t: Date.now() }));
+    }
+  }, WS_HEARTBEAT_MS);
+}
+
+function stopHeartbeat() {
+  if (heartbeatTimer) {
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
+  }
+}
+
+function clearReconnectTimer() {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+}
+
+function scheduleReconnect() {
+  if (intentionalDisconnect || reconnectTimer || !currentRoomId || !role || !gameType) return;
+  addLog('in', `Reconnecting in ${WS_RECONNECT_MS / 1000}s…`);
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    if (intentionalDisconnect || !currentRoomId || ws) return;
+    connectToRoom(currentRoomId, { gameType, maxPlayers });
+  }, WS_RECONNECT_MS);
 }
 
 function sendWs(msg) {
@@ -252,15 +835,27 @@ function handleServerMessage(data) {
   switch (msg.type) {
     case 'system': {
       if (msg.rejected) {
+        intentionalDisconnect = true;
+        stopHeartbeat();
+        clearReconnectTimer();
         addLog('in', `⛔ REJECTED: ${msg.text}`);
         setLocalStatus('disconnected');
         setRemoteStatus('disconnected');
+        currentRoomId = null;
         sessionStorage.removeItem(SESSION_KEY);
         sessionStorage.removeItem(SESSION_ROLE_KEY);
+        sessionStorage.removeItem(SESSION_GAME_TYPE_KEY);
         sessionStorage.removeItem(SESSION_PLAYER_KEY);
-        showRoomFullModal();
+        showRoomRejectedModal(msg.text || 'Unable to join this room.');
         break;
       }
+      if (msg.gameType) {
+        gameType = msg.gameType;
+        sessionStorage.setItem(SESSION_GAME_TYPE_KEY, gameType);
+      }
+      if (msg.maxPlayers) maxPlayers = msg.maxPlayers;
+      if (msg.playerId) localPlayerId = msg.playerId;
+      if (Array.isArray(msg.players)) updateRemotePlayersFromList(msg.players);
       let peerCount = msg.peerCount;
       if (typeof peerCount !== 'number') {
         const m = msg.text?.match(/(\d+)\s+player\(s\)/);
@@ -269,28 +864,46 @@ function handleServerMessage(data) {
       if (typeof peerCount === 'number') {
         setRemoteStatus(peerCount >= 2 ? 'connected' : 'disconnected');
       }
+      if (gameType === GAME_TYPE_TRADITIONAL && msg.playerId) {
+        activateTraditionalGame();
+      }
       addLog('in', `SYSTEM: ${msg.text}`);
       break;
     }
     case 'join':
       setRemoteStatus('connected');
-      addLog('in', 'RECV: join');
+      if (Array.isArray(msg.players)) updateRemotePlayersFromList(msg.players);
+      if (msg.username) {
+        setRemotePlayerDisplay(msg.username, msg.senderId || 'opponent');
+      }
+      if (gameType === GAME_TYPE_TRADITIONAL) {
+        broadcastCurrentLife();
+      }
+      addLog('in', `RECV: join (${msg.username || 'Anonymous'})`);
       break;
     case 'game-init':
+      if (gameType !== GAME_TYPE_SHARED) break;
       addLog('in', `RECV: game-init (${msg.library?.length} cards)`);
       runGuestGameStart(msg.library);
       break;
     case 'game-ready':
+      if (gameType !== GAME_TYPE_SHARED) break;
       addLog('in', `RECV: game-ready (${msg.drawnCount} cards drawn)`);
       finishHostGameStart(msg.drawnCount);
       break;
     case 'game-start':
+      if (gameType !== GAME_TYPE_SHARED) break;
       addLog('in', 'RECV: game-start');
       enableStartButton();
       break;
     case 'zone-sync':
       addLog('in', `RECV: zone-sync ${msg.action} ${msg.zone || ''}`);
       handleRemoteSync(msg);
+      break;
+    case 'life-sync':
+      updateRemoteLife(msg.life, msg.senderId, msg.username);
+      break;
+    case 'pong':
       break;
     default:
       addLog('in', `RECV: ${msg.type}`);
@@ -309,8 +922,20 @@ function setRemoteStatus(state) {
   remoteStatus = state;
   applyDotState(remoteDot, state, 'Opponent');
 
+  // Hide remote player row on disconnect.
+  if (state === 'disconnected' && remotePlayerRow && gameType !== GAME_TYPE_TRADITIONAL) {
+    setRemotePlayerDisplay(null);
+  }
+
   // Trigger game start when both players are connected for the first time.
-  if (!wasConnected && state === 'connected' && localStatus === 'connected' && !gameStarted && !gameSetupDone) {
+  if (
+    gameType === GAME_TYPE_SHARED &&
+    !wasConnected &&
+    state === 'connected' &&
+    localStatus === 'connected' &&
+    !gameStarted &&
+    !gameSetupDone
+  ) {
     startGameFlow();
   }
 }
@@ -335,6 +960,7 @@ function applyDotState(dot, state, label) {
 // ── Game start flow ─────────────────────────────────────────────────
 
 function startGameFlow() {
+  if (gameType !== GAME_TYPE_SHARED) return;
   gameSetupDone = false;
   showGameModal();
   if (role === 'host') {
@@ -343,8 +969,28 @@ function startGameFlow() {
   // Guest waits for game-init message.
 }
 
+function activateTraditionalGame() {
+  if (traditionalLifeInitialized) return;
+  traditionalLifeInitialized = true;
+  gameStarted = true;
+  gameSetupDone = true;
+  broadcastCurrentLife();
+}
+
+function broadcastCurrentLife() {
+  sendCmd('get-life').then(result => {
+    if (result?.life != null) {
+      updateLocalLife(result.life);
+      sendWs({ type: 'life-sync', life: result.life });
+    }
+  }).catch(() => {});
+}
+
 async function runHostGameStart() {
   try {
+    // Dismiss Moxfield's "Save State Found" dialog if present.
+    await sendCmd('discard-save-state');
+
     updateGameModalStatus('Resetting…');
     const resetResult = await sendCmd('reset-to-library');
     addLog('out', `DEBUG: reset-to-library → ${JSON.stringify(resetResult)}`);
@@ -388,6 +1034,9 @@ async function finishHostGameStart(drawnCount) {
 async function runGuestGameStart(libraryCards) {
   try {
     addLog('in', `DEBUG: game-init received ${libraryCards?.length} cards, first: ${JSON.stringify(libraryCards?.[0])}`);
+
+    // Dismiss Moxfield's "Save State Found" dialog if present.
+    await sendCmd('discard-save-state');
 
     updateGameModalStatus('Resetting…');
     const resetResult = await sendCmd('reset-to-library');
@@ -441,6 +1090,14 @@ function showGameModal() {
     gameStarted = true; // Enable ongoing sync now that setup is complete.
     gameModal.remove();
     gameModal = null;
+    // Initialize life display.
+    sendCmd('get-life').then(result => {
+      if (result?.life != null) {
+        updateLocalLife(result.life);
+        // Send initial life to opponent.
+        sendWs({ type: 'life-sync', life: result.life });
+      }
+    }).catch(() => {});
   });
 
   popup.appendChild(heading);
@@ -460,10 +1117,12 @@ function enableStartButton() {
   updateGameModalStatus('Ready to play!');
   const btn = document.getElementById('moxmox-start-btn');
   if (btn) btn.disabled = false;
-  sendCmd('inject-divider').catch(() => {});
+  if (gameType === GAME_TYPE_SHARED) {
+    sendCmd('inject-divider').catch(() => {});
+  }
 }
 
-function showRoomFullModal() {
+function showRoomRejectedModal(text = 'This game already has two players connected.') {
   // Replace whatever modal is showing with a "Room is Full" message.
   if (gameModal) {
     gameModal.remove();
@@ -478,10 +1137,10 @@ function showRoomFullModal() {
   popup.style.textAlign = 'center';
 
   const heading = document.createElement('h3');
-  heading.textContent = 'Room is Full';
+  heading.textContent = 'Unable to Join Room';
 
   const msg = document.createElement('p');
-  msg.textContent = 'This game already has two players connected.';
+  msg.textContent = text;
 
   const closeBtn = document.createElement('button');
   closeBtn.className = 'moxmox-popup-copy-btn';
@@ -501,12 +1160,86 @@ function showRoomFullModal() {
   document.body.appendChild(gameModal);
 }
 
+// ── Username prompt ─────────────────────────────────────────────────
+
+function showUsernamePrompt(onComplete) {
+  if (gameModal) {
+    gameModal.remove();
+    gameModal = null;
+  }
+
+  gameModal = document.createElement('div');
+  gameModal.className = 'moxmox-popup-backdrop';
+
+  const popup = document.createElement('div');
+  popup.className = 'moxmox-popup';
+  popup.style.textAlign = 'center';
+
+  const heading = document.createElement('h3');
+  heading.textContent = 'Set Your Username';
+
+  const subtitle = document.createElement('p');
+  subtitle.textContent = 'Enter a username before starting a game.';
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.placeholder = 'Your name';
+  input.maxLength = 30;
+  input.style.cssText = 'width: 100%; padding: 8px 10px; border: 1px solid rgba(255,255,255,0.15); border-radius: 4px; background: #111; color: #e0e0e0; font-size: 14px; margin-bottom: 8px;';
+
+  const error = document.createElement('div');
+  error.style.cssText = 'color: #e53935; font-size: 12px; min-height: 18px; margin-bottom: 8px;';
+
+  const confirmBtn = document.createElement('button');
+  confirmBtn.className = 'moxmox-popup-copy-btn';
+  confirmBtn.textContent = 'Continue';
+  confirmBtn.style.cssText = 'padding: 10px 32px; font-size: 15px;';
+
+  function submit() {
+    const name = input.value.trim();
+    if (!name) {
+      error.textContent = 'Please enter a username.';
+      input.focus();
+      return;
+    }
+    chrome.storage.local.set({ moxmox_username: name }, () => {
+      gameModal.remove();
+      gameModal = null;
+      onComplete();
+    });
+  }
+
+  confirmBtn.addEventListener('click', submit);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') submit();
+  });
+
+  popup.appendChild(heading);
+  popup.appendChild(subtitle);
+  popup.appendChild(input);
+  popup.appendChild(error);
+  popup.appendChild(confirmBtn);
+  gameModal.appendChild(popup);
+  document.body.appendChild(gameModal);
+
+  // Focus the input after a short delay (DOM needs to be rendered).
+  setTimeout(() => input.focus(), 50);
+}
+
 // ── Ongoing sync: local events → remote ─────────────────────────────
 
 async function handleLocalGameEvent(event) {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
 
   const { type, card, fromZone, toZone } = event;
+
+  if (gameType === GAME_TYPE_TRADITIONAL) {
+    if (type === 'life:changed') {
+      updateLocalLife(event.to);
+      sendWs({ type: 'life-sync', life: event.to });
+    }
+    return;
+  }
 
   if (type === 'card:zone-changed') {
     const fromShared = SHARED_ZONES.has(fromZone);
@@ -515,12 +1248,12 @@ async function handleLocalGameEvent(event) {
     const toBF = toZone === 'battlefield';
 
     if (toBF) {
-      // Anything → battlefield: send card position as percentage of usable bounds.
+      // Send card center as percentage of battlefield dimensions.
       const size = await sendCmd('get-battlefield-size');
-      const maxLeft = size.usableWidth;
-      const maxTop = Math.max(0, size.height - size.cardH);
-      const pctX = maxLeft > 0 ? (card.left ?? 0) / maxLeft : 0.5;
-      const pctY = maxTop > 0 ? (card.top ?? 0) / maxTop : 0.5;
+      const centerX = (card.left ?? 0) + size.cardW / 2;
+      const centerY = (card.top ?? 0) + size.cardH / 2;
+      const pctX = size.usableWidth > 0 ? centerX / size.usableWidth : 0.5;
+      const pctY = size.height > 0 ? centerY / size.height : 0.5;
       sendWs({
         type: 'zone-sync', action: 'add-battlefield',
         cardId: card.id, syncId: card.syncId,
@@ -566,14 +1299,14 @@ async function handleLocalGameEvent(event) {
     // Uses top-left coordinates normalized against usable bounds.
     if (changes.left || changes.top) {
       const size = await sendCmd('get-battlefield-size');
-      const maxLeft = size.usableWidth;
-      const maxTop = Math.max(0, size.height - size.cardH);
 
       if (changes.left) {
-        syncUpdates.pctX = maxLeft > 0 ? (card.left ?? 0) / maxLeft : 0.5;
+        const centerX = (card.left ?? 0) + size.cardW / 2;
+        syncUpdates.pctX = size.usableWidth > 0 ? centerX / size.usableWidth : 0.5;
       }
       if (changes.top) {
-        syncUpdates.pctY = maxTop > 0 ? (card.top ?? 0) / maxTop : 0.5;
+        const centerY = (card.top ?? 0) + size.cardH / 2;
+        syncUpdates.pctY = size.height > 0 ? centerY / size.height : 0.5;
       }
     }
 
@@ -592,6 +1325,9 @@ async function handleLocalGameEvent(event) {
   } else if (type === 'selection-changed') {
     sendWs({ type: 'zone-sync', action: 'highlight',
       syncIds: event.syncIds || [] });
+  } else if (type === 'life:changed') {
+    updateLocalLife(event.to);
+    sendWs({ type: 'life-sync', life: event.to });
   }
 }
 
@@ -605,6 +1341,10 @@ function clamp(n, min, max) {
 
 async function handleRemoteSync(msg) {
   try {
+    const traditionalActions = new Set(['reveal-hand', 'request-zone-view', 'zone-view']);
+    if (gameType === GAME_TYPE_TRADITIONAL && !traditionalActions.has(msg.action)) {
+      return;
+    }
     switch (msg.action) {
       case 'add':
         await sendCmd('sync-add', { zone: msg.zone, cardId: msg.cardId, syncId: msg.syncId });
@@ -616,12 +1356,12 @@ async function handleRemoteSync(msg) {
         await sendCmd('sync-move', { fromZone: msg.fromZone, toZone: msg.toZone, syncId: msg.syncId });
         break;
       case 'add-battlefield': {
-        // Mirror position using top-left model.
+        // Mirror card center, then convert back to top-left.
         const size = await sendCmd('get-battlefield-size');
-        const maxLeft = size.usableWidth;
-        const maxTop = Math.max(0, size.height - size.cardH);
-        const localLeft = clamp(Math.round((1 - msg.pctX) * maxLeft), 0, maxLeft);
-        const localTop = clamp(Math.round((1 - msg.pctY) * maxTop), 0, maxTop);
+        const mirroredCX = (1 - msg.pctX) * size.usableWidth;
+        const mirroredCY = (1 - msg.pctY) * size.height;
+        const localLeft = clamp(Math.round(mirroredCX - size.cardW / 2), 0, size.usableWidth - size.cardW);
+        const localTop = clamp(Math.round(mirroredCY - size.cardH / 2), 0, size.height - size.cardH);
         await sendCmd('sync-add-battlefield', {
           cardId: msg.cardId, syncId: msg.syncId,
           top: localTop, left: localLeft, rotated: true,
@@ -637,15 +1377,15 @@ async function handleRemoteSync(msg) {
         // Translate each axis independently — don't invent the missing axis.
         if ('pctX' in updates || 'pctY' in updates) {
           const size = await sendCmd('get-battlefield-size');
-          const maxLeft = size.usableWidth;
-          const maxTop = Math.max(0, size.height - size.cardH);
 
           if ('pctX' in updates) {
-            updates.left = clamp(Math.round((1 - updates.pctX) * maxLeft), 0, maxLeft);
+            const mirroredCX = (1 - updates.pctX) * size.usableWidth;
+            updates.left = clamp(Math.round(mirroredCX - size.cardW / 2), 0, size.usableWidth - size.cardW);
             delete updates.pctX;
           }
           if ('pctY' in updates) {
-            updates.top = clamp(Math.round((1 - updates.pctY) * maxTop), 0, maxTop);
+            const mirroredCY = (1 - updates.pctY) * size.height;
+            updates.top = clamp(Math.round(mirroredCY - size.cardH / 2), 0, size.height - size.cardH);
             delete updates.pctY;
           }
         }
@@ -655,25 +1395,64 @@ async function handleRemoteSync(msg) {
       case 'highlight':
         await sendCmd('apply-remote-highlight', { syncIds: msg.syncIds || [] });
         break;
+      case 'reveal-hand':
+        await showRevealedHand(msg.cards || [], msg.username || 'Opponent');
+        addLog('in', `RECV: opponent revealed hand (${msg.cards?.length || 0} cards)`);
+        break;
+      case 'request-zone-view': {
+        if (gameType !== GAME_TYPE_TRADITIONAL) break;
+        if (!['graveyard', 'exile'].includes(msg.zone) || !msg.senderId) break;
+        const result = await sendCmd('get-zone-cards', { zone: msg.zone });
+        const cards = result?.cards || [];
+        sendWs({
+          type: 'zone-sync',
+          action: 'zone-view',
+          targetId: msg.senderId,
+          zone: msg.zone,
+          cards,
+          username: await getLocalUsername(),
+        });
+        addLog('out', `SEND: ${msg.zone} contents (${cards.length} cards)`);
+        break;
+      }
+      case 'zone-view':
+        if (gameType !== GAME_TYPE_TRADITIONAL) break;
+        await showZoneViewer(msg.cards || [], msg.username || 'Opponent', msg.zone);
+        addLog('in', `RECV: ${msg.username || 'Opponent'} ${msg.zone} (${msg.cards?.length || 0} cards)`);
+        break;
     }
   } catch (err) {
     console.error('[MoxMox] Sync error:', err);
   }
 }
 
-// ── Share popup ─────────────────────────────────────────────────────
+// ── Invite / join popups ─────────────────────────────────────────────
 
-function showSharePopup() {
+function showCurrentTraditionalRoomCodePopup() {
+  showCurrentInviteValuePopup({
+    title: 'Traditional Room Code',
+    subtitle: 'Share this code with players joining from the MoxMox Join menu.',
+    value: currentRoomId,
+    copiedText: 'Room code copied to clipboard',
+  });
+}
+
+function showCurrentSharedInvitePopup() {
+  showCurrentInviteValuePopup({
+    title: 'Shared Deck Invite',
+    subtitle: 'Send this link to your opponent. They need the MoxMox extension installed.',
+    value: buildShareUrl(stripRoomParam(window.location.href), currentRoomId),
+    copiedText: 'Link copied to clipboard',
+  });
+}
+
+function showCurrentInviteValuePopup({ title, subtitle, value, copiedText }) {
   if (popupBackdrop) {
     popupBackdrop.remove();
     popupBackdrop = null;
   }
 
-  const shareUrl = buildShareUrl(
-    stripRoomParam(window.location.href),
-    currentRoomId,
-  );
-  copyToClipboard(shareUrl);
+  copyToClipboard(value);
 
   popupBackdrop = document.createElement('div');
   popupBackdrop.className = 'moxmox-popup-backdrop';
@@ -682,33 +1461,92 @@ function showSharePopup() {
   popup.className = 'moxmox-popup';
 
   const heading = document.createElement('h3');
-  heading.textContent = 'Play Together';
+  heading.textContent = title;
 
-  const subtitle = document.createElement('p');
-  subtitle.textContent = 'Send this link to your opponent. They\'ll need the MoxMox extension installed.';
+  const subtitleEl = document.createElement('p');
+  subtitleEl.textContent = subtitle;
 
-  const urlRow = document.createElement('div');
-  urlRow.className = 'moxmox-popup-url-row';
-
-  const urlBox = document.createElement('div');
-  urlBox.className = 'moxmox-popup-url';
-  urlBox.textContent = shareUrl;
-
-  const copyBtn = document.createElement('button');
-  copyBtn.className = 'moxmox-popup-copy-btn';
-  copyBtn.textContent = 'Copy';
-  copyBtn.addEventListener('click', () => {
-    copyToClipboard(shareUrl);
-    showCopiedFeedback();
-  });
-
-  urlRow.appendChild(urlBox);
-  urlRow.appendChild(copyBtn);
+  const body = document.createElement('div');
+  renderInviteOutput(body, value, copiedText);
 
   const copiedMsg = document.createElement('div');
   copiedMsg.className = 'moxmox-popup-copied';
   copiedMsg.id = 'moxmox-copied-msg';
-  copiedMsg.textContent = '✓ Link copied to clipboard';
+  copiedMsg.textContent = '';
+
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'moxmox-popup-close-btn';
+  closeBtn.textContent = 'Close';
+  closeBtn.addEventListener('click', () => {
+    popupBackdrop.remove();
+    popupBackdrop = null;
+  });
+
+  popup.appendChild(heading);
+  popup.appendChild(subtitleEl);
+  popup.appendChild(body);
+  popup.appendChild(copiedMsg);
+  popup.appendChild(closeBtn);
+  popupBackdrop.appendChild(popup);
+
+  popupBackdrop.addEventListener('click', (e) => {
+    if (e.target === popupBackdrop) {
+      popupBackdrop.remove();
+      popupBackdrop = null;
+    }
+  });
+
+  document.body.appendChild(popupBackdrop);
+  showCopiedFeedback(copiedText);
+}
+
+function showInvitePopup() {
+  if (popupBackdrop) {
+    popupBackdrop.remove();
+    popupBackdrop = null;
+  }
+
+  popupBackdrop = document.createElement('div');
+  popupBackdrop.className = 'moxmox-popup-backdrop';
+
+  const popup = document.createElement('div');
+  popup.className = 'moxmox-popup';
+
+  const heading = document.createElement('h3');
+  heading.textContent = 'Invite Players';
+
+  const subtitle = document.createElement('p');
+  subtitle.textContent = 'Choose a game type to create an invite.';
+
+  const sections = document.createElement('div');
+  sections.className = 'moxmox-game-type-sections';
+
+  const sharedSection = createInviteSection(
+    'Shared Deck (e.g. DanDan)',
+    'Share a deck, sync library/graveyard/exile, battlefield cards, and life totals.',
+  );
+  const traditionalSection = createInviteSection(
+    'Traditional (e.g. Commander)',
+    'Use separate decks. Sync life totals and targeted hand reveal only.',
+  );
+
+  sharedSection.button.addEventListener('click', () => {
+    activateInviteSection(sharedSection, traditionalSection);
+    createSharedInvite(sharedSection.body);
+  });
+
+  traditionalSection.button.addEventListener('click', () => {
+    activateInviteSection(traditionalSection, sharedSection);
+    renderTraditionalCreate(traditionalSection.body);
+  });
+
+  sections.appendChild(sharedSection.root);
+  sections.appendChild(traditionalSection.root);
+
+  const copiedMsg = document.createElement('div');
+  copiedMsg.className = 'moxmox-popup-copied';
+  copiedMsg.id = 'moxmox-copied-msg';
+  copiedMsg.textContent = '';
 
   const closeBtn = document.createElement('button');
   closeBtn.className = 'moxmox-popup-close-btn';
@@ -720,7 +1558,7 @@ function showSharePopup() {
 
   popup.appendChild(heading);
   popup.appendChild(subtitle);
-  popup.appendChild(urlRow);
+  popup.appendChild(sections);
   popup.appendChild(copiedMsg);
   popup.appendChild(closeBtn);
   popupBackdrop.appendChild(popup);
@@ -735,9 +1573,382 @@ function showSharePopup() {
   document.body.appendChild(popupBackdrop);
 }
 
-function showCopiedFeedback() {
+function createInviteSection(title, description) {
+  const root = document.createElement('section');
+  root.className = 'moxmox-game-type-section';
+
+  const button = document.createElement('button');
+  button.className = 'moxmox-game-type-button';
+  button.type = 'button';
+
+  const titleEl = document.createElement('span');
+  titleEl.className = 'moxmox-game-type-title';
+  titleEl.textContent = title;
+
+  const descEl = document.createElement('span');
+  descEl.className = 'moxmox-game-type-description';
+  descEl.textContent = description;
+
+  button.appendChild(titleEl);
+  button.appendChild(descEl);
+
+  const body = document.createElement('div');
+  body.className = 'moxmox-game-type-body';
+  body.hidden = true;
+
+  root.appendChild(button);
+  root.appendChild(body);
+  return { root, button, body };
+}
+
+function activateInviteSection(active, inactive) {
+  active.root.classList.add('active');
+  active.body.hidden = false;
+  inactive.root.classList.remove('active');
+  inactive.body.hidden = true;
+  inactive.body.innerHTML = '';
+}
+
+function createSharedInvite(container) {
+  resetRoomState(GAME_TYPE_SHARED);
+  role = 'host';
+  const roomId = generateRoomId();
+  connectToRoom(roomId, { gameType: GAME_TYPE_SHARED });
+
+  const shareUrl = buildShareUrl(stripRoomParam(window.location.href), roomId);
+  copyToClipboard(shareUrl);
+  renderInviteOutput(container, shareUrl, 'Link copied to clipboard');
+}
+
+function renderTraditionalCreate(container) {
+  container.innerHTML = '';
+
+  const controls = document.createElement('div');
+  controls.className = 'moxmox-traditional-controls';
+
+  const label = document.createElement('label');
+  label.textContent = 'Max players';
+
+  const select = document.createElement('select');
+  for (const count of [2, 3, 4]) {
+    const opt = document.createElement('option');
+    opt.value = String(count);
+    opt.textContent = String(count);
+    select.appendChild(opt);
+  }
+
+  const createBtn = document.createElement('button');
+  createBtn.className = 'moxmox-popup-copy-btn';
+  createBtn.textContent = 'Create Room';
+
+  const error = document.createElement('div');
+  error.className = 'moxmox-popup-error';
+
+  createBtn.addEventListener('click', async () => {
+    createBtn.disabled = true;
+    error.textContent = '';
+    try {
+      resetRoomState(GAME_TYPE_TRADITIONAL);
+      role = 'host';
+      maxPlayers = parseInt(select.value, 10);
+      const roomId = await createUniqueTraditionalRoom(maxPlayers);
+      connectToRoom(roomId, { gameType: GAME_TYPE_TRADITIONAL, maxPlayers });
+      copyToClipboard(roomId);
+      renderInviteOutput(container, roomId, 'Room code copied to clipboard');
+    } catch (err) {
+      error.textContent = err.message;
+      createBtn.disabled = false;
+    }
+  });
+
+  label.appendChild(select);
+  controls.appendChild(label);
+  controls.appendChild(createBtn);
+  container.appendChild(controls);
+  container.appendChild(error);
+}
+
+async function createUniqueTraditionalRoom(players) {
+  let lastError = null;
+  for (let i = 0; i < 5; i++) {
+    const roomId = generateTraditionalRoomCode();
+    try {
+      await createTraditionalRoom(roomId, players);
+      return roomId;
+    } catch (err) {
+      lastError = err;
+      if (!/already exists/i.test(err.message)) throw err;
+    }
+  }
+  throw lastError || new Error('Could not create a unique room code');
+}
+
+function renderInviteOutput(container, value, copiedText) {
+  container.innerHTML = '';
+
+  const row = document.createElement('div');
+  row.className = 'moxmox-popup-url-row';
+
+  const box = document.createElement('div');
+  box.className = 'moxmox-popup-url';
+  box.textContent = value;
+
+  const copyBtn = document.createElement('button');
+  copyBtn.className = 'moxmox-popup-copy-btn';
+  copyBtn.textContent = 'Copy';
+  copyBtn.addEventListener('click', () => {
+    copyToClipboard(value);
+    showCopiedFeedback(copiedText);
+  });
+
+  row.appendChild(box);
+  row.appendChild(copyBtn);
+  container.appendChild(row);
+  showCopiedFeedback(copiedText);
+}
+
+async function createTraditionalRoom(roomId, players) {
+  const response = await fetch(`${HTTP_URL}/room/${encodeURIComponent(roomId)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ gameType: GAME_TYPE_TRADITIONAL, maxPlayers: players }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error || `Could not create room (${response.status})`);
+  }
+  return data;
+}
+
+async function fetchRoomInfo(roomId) {
+  const response = await fetch(`${HTTP_URL}/room/${encodeURIComponent(roomId)}/info`);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error || `Room not found (${response.status})`);
+  }
+  return data;
+}
+
+function showTraditionalJoinPopup() {
+  ensureUsername(() => {
+    if (popupBackdrop) {
+      popupBackdrop.remove();
+      popupBackdrop = null;
+    }
+
+    popupBackdrop = document.createElement('div');
+    popupBackdrop.className = 'moxmox-popup-backdrop';
+
+    const popup = document.createElement('div');
+    popup.className = 'moxmox-popup';
+
+    const heading = document.createElement('h3');
+    heading.textContent = 'Join Traditional Game';
+
+    const subtitle = document.createElement('p');
+    subtitle.textContent = 'Enter the room code from the host.';
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.maxLength = 6;
+    input.placeholder = 'ABC234';
+    input.className = 'moxmox-room-code-input';
+
+    const status = document.createElement('div');
+    status.className = 'moxmox-room-info';
+
+    const joinBtn = document.createElement('button');
+    joinBtn.className = 'moxmox-popup-copy-btn';
+    joinBtn.textContent = 'Join';
+    joinBtn.disabled = true;
+
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'moxmox-popup-close-btn';
+    closeBtn.textContent = 'Close';
+    closeBtn.addEventListener('click', () => {
+      popupBackdrop.remove();
+      popupBackdrop = null;
+    });
+
+    let selectedInfo = null;
+    let timer = null;
+    input.addEventListener('input', () => {
+      input.value = input.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+      selectedInfo = null;
+      joinBtn.disabled = true;
+      clearTimeout(timer);
+      const roomId = input.value.trim();
+      if (!isTraditionalRoomCode(roomId)) {
+        status.textContent = roomId ? 'Enter a valid 6-character room code.' : '';
+        return;
+      }
+      status.textContent = 'Checking room...';
+      timer = setTimeout(async () => {
+        try {
+          const info = await fetchRoomInfo(roomId);
+          if (info.gameType !== GAME_TYPE_TRADITIONAL) {
+            throw new Error('That room is not a Traditional game.');
+          }
+          selectedInfo = info;
+          renderJoinRoomInfo(status, info);
+          const reconnecting =
+            sessionStorage.getItem(SESSION_KEY) === roomId &&
+            sessionStorage.getItem(SESSION_GAME_TYPE_KEY) === GAME_TYPE_TRADITIONAL &&
+            !!sessionStorage.getItem(SESSION_PLAYER_KEY);
+          joinBtn.disabled = info.full && !reconnecting;
+        } catch (err) {
+          status.textContent = err.message;
+          joinBtn.disabled = true;
+        }
+      }, 250);
+    });
+
+    joinBtn.addEventListener('click', () => {
+      const roomId = input.value.trim();
+      if (!selectedInfo || !isTraditionalRoomCode(roomId)) return;
+      const reconnecting =
+        sessionStorage.getItem(SESSION_KEY) === roomId &&
+        sessionStorage.getItem(SESSION_GAME_TYPE_KEY) === GAME_TYPE_TRADITIONAL &&
+        !!sessionStorage.getItem(SESSION_PLAYER_KEY);
+      if (!reconnecting) {
+        resetRoomState(GAME_TYPE_TRADITIONAL);
+      } else {
+        gameType = GAME_TYPE_TRADITIONAL;
+        traditionalLifeInitialized = false;
+      }
+      role = 'guest';
+      maxPlayers = selectedInfo.maxPlayers;
+      connectToRoom(roomId, { gameType: GAME_TYPE_TRADITIONAL, maxPlayers });
+      popupBackdrop.remove();
+      popupBackdrop = null;
+    });
+
+    popup.appendChild(heading);
+    popup.appendChild(subtitle);
+    popup.appendChild(input);
+    popup.appendChild(status);
+    popup.appendChild(joinBtn);
+    popup.appendChild(closeBtn);
+    popupBackdrop.appendChild(popup);
+    document.body.appendChild(popupBackdrop);
+    setTimeout(() => input.focus(), 50);
+  });
+}
+
+function renderJoinRoomInfo(container, info) {
+  const players = info.players || [];
+  container.innerHTML = '';
+
+  const summary = document.createElement('div');
+  summary.textContent = `${players.length}/${info.maxPlayers} seats reserved`;
+  container.appendChild(summary);
+
+  const list = document.createElement('div');
+  list.className = 'moxmox-room-player-list';
+  for (const player of players) {
+    const row = document.createElement('div');
+    row.textContent = `${player.username || 'Anonymous'}${player.connected ? '' : ' (offline)'}`;
+    list.appendChild(row);
+  }
+  if (players.length === 0) {
+    const empty = document.createElement('div');
+    empty.textContent = 'No players have joined yet.';
+    list.appendChild(empty);
+  }
+  container.appendChild(list);
+
+  if (info.full) {
+    const full = document.createElement('div');
+    full.className = 'moxmox-popup-error';
+    full.textContent = 'This room is full.';
+    container.appendChild(full);
+  }
+}
+
+function showLeaveGamePrompt() {
+  if (popupBackdrop) {
+    popupBackdrop.remove();
+    popupBackdrop = null;
+  }
+
+  popupBackdrop = document.createElement('div');
+  popupBackdrop.className = 'moxmox-popup-backdrop';
+
+  const popup = document.createElement('div');
+  popup.className = 'moxmox-popup';
+  popup.style.textAlign = 'center';
+
+  const heading = document.createElement('h3');
+  heading.textContent = 'Leave Game';
+
+  const msg = document.createElement('p');
+  msg.textContent = 'Are you sure you want to leave this game?';
+
+  const actions = document.createElement('div');
+  actions.className = 'moxmox-popup-actions';
+
+  const cancelBtn = document.createElement('button');
+  cancelBtn.className = 'moxmox-popup-close-btn';
+  cancelBtn.textContent = 'Cancel';
+  cancelBtn.addEventListener('click', () => {
+    popupBackdrop.remove();
+    popupBackdrop = null;
+  });
+
+  const leaveBtn = document.createElement('button');
+  leaveBtn.className = 'moxmox-popup-copy-btn';
+  leaveBtn.textContent = 'Leave Game';
+  leaveBtn.addEventListener('click', () => {
+    leaveCurrentGame();
+    popupBackdrop.remove();
+    popupBackdrop = null;
+  });
+
+  actions.appendChild(cancelBtn);
+  actions.appendChild(leaveBtn);
+  popup.appendChild(heading);
+  popup.appendChild(msg);
+  popup.appendChild(actions);
+  popupBackdrop.appendChild(popup);
+  document.body.appendChild(popupBackdrop);
+}
+
+function leaveCurrentGame() {
+  intentionalDisconnect = true;
+  stopHeartbeat();
+  clearReconnectTimer();
+  if (ws) {
+    try { ws.close(); } catch (_) {}
+    ws = null;
+  }
+
+  currentRoomId = null;
+  role = null;
+  gameType = null;
+  maxPlayers = null;
+  localPlayerId = null;
+  remoteUsername = null;
+  remotePlayers = new Map();
+  traditionalLifeInitialized = false;
+  gameStarted = false;
+  gameSetupDone = false;
+
+  sessionStorage.removeItem(SESSION_KEY);
+  sessionStorage.removeItem(SESSION_ROLE_KEY);
+  sessionStorage.removeItem(SESSION_GAME_TYPE_KEY);
+  sessionStorage.removeItem(SESSION_PLAYER_KEY);
+
+  setLocalStatus('disconnected');
+  setRemoteStatus('disconnected');
+  setRemotePlayersDisplay([]);
+  addLog('out', 'Left game');
+  notifyPopup();
+}
+
+function showCopiedFeedback(text = 'Copied to clipboard') {
   const msg = document.getElementById('moxmox-copied-msg');
   if (msg) {
+    msg.textContent = `✓ ${text}`;
     msg.style.opacity = '0';
     requestAnimationFrame(() => {
       msg.style.transition = 'opacity 0.2s';
@@ -782,7 +1993,10 @@ function notifyPopup() {
     localStatus,
     remoteStatus,
     role,
+    gameType,
+    maxPlayers,
     roomId: currentRoomId,
+    players: [...remotePlayers.values()],
     log: messageLog,
     isGoldfish: true,
   }).catch(() => {});
@@ -796,7 +2010,10 @@ function handlePopupMessage(message, _sender, sendResponse) {
       localStatus,
       remoteStatus,
       role,
+      gameType,
+      maxPlayers,
       roomId: currentRoomId,
+      players: [...remotePlayers.values()],
       log: messageLog,
       isGoldfish: true,
     });
