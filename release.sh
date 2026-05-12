@@ -8,6 +8,7 @@ set -euo pipefail
 #
 # By default, increments the minor version (e.g. v0.1.0 → v0.2.0).
 # Use --patch to increment only the patch version (e.g. v0.1.0 → v0.1.1).
+# Use --nobump/--no-bump to release the current manifest version.
 # Use --dryrun to preview what would happen without making any changes.
 #
 # Required environment variables:
@@ -17,37 +18,51 @@ set -euo pipefail
 # Usage:
 #   ./release.sh                        # bump minor version
 #   ./release.sh --patch                # bump patch version
+#   ./release.sh --nobump               # release current version
 #   ./release.sh --dryrun               # preview minor bump
 
 # --- Argument parsing ---
 
 BUMP="minor"
+NO_BUMP=false
 DRYRUN=false
 for arg in "$@"; do
   case "$arg" in
-    --patch)  BUMP="patch" ;;
+    --patch) BUMP="patch" ;;
+    --nobump|--no-bump) NO_BUMP=true ;;
     --dryrun) DRYRUN=true ;;
     *)
-      echo "Usage: $0 [--patch] [--dryrun]"
+      echo "Usage: $0 [--patch | --nobump] [--dryrun]"
       echo "  Unknown argument: $arg"
       exit 1
       ;;
   esac
 done
 
+if [[ "$NO_BUMP" == true && "$BUMP" != "minor" ]]; then
+  echo "Error: --nobump cannot be combined with --patch"
+  echo "Usage: $0 [--patch | --nobump] [--dryrun]"
+  exit 1
+fi
+
 # Read current version from manifests/base.json
 CURRENT=$(node -e "import{readFileSync as r}from'fs';console.log(JSON.parse(r('manifests/base.json','utf8')).version)")
 IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
 
-if [[ "$BUMP" == "patch" ]]; then
+if [[ "$NO_BUMP" == true ]]; then
+  VERSION="$CURRENT"
+  BUMP_LABEL="no version bump"
+elif [[ "$BUMP" == "patch" ]]; then
   VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))"
+  BUMP_LABEL="$BUMP bump"
 else
   VERSION="${MAJOR}.$((MINOR + 1)).0"
+  BUMP_LABEL="$BUMP bump"
 fi
 
 TAG="v${VERSION}"
 
-echo "Current version: $CURRENT → releasing $TAG ($BUMP bump)"
+echo "Current version: $CURRENT → releasing $TAG ($BUMP_LABEL)"
 
 if $DRYRUN; then
   echo ""
@@ -117,25 +132,41 @@ fi
 
 # --- Update version ---
 
-echo "Updating version to $VERSION..."
+if [[ "$NO_BUMP" == true ]]; then
+  echo "Skipping version update (--nobump)."
+else
+  echo "Updating version to $VERSION..."
 
-# Update manifests/base.json
-node -e "
-  import { readFileSync, writeFileSync } from 'fs';
-  const json = JSON.parse(readFileSync('manifests/base.json', 'utf8'));
-  json.version = '${VERSION}';
-  writeFileSync('manifests/base.json', JSON.stringify(json, null, 2) + '\n');
-  console.log('  manifests/base.json ✓');
-"
+  # Update manifests/base.json
+  node -e "
+    import { readFileSync, writeFileSync } from 'fs';
+    const json = JSON.parse(readFileSync('manifests/base.json', 'utf8'));
+    json.version = '${VERSION}';
+    writeFileSync('manifests/base.json', JSON.stringify(json, null, 2) + '\n');
+    console.log('  manifests/base.json ✓');
+  "
 
-# Update package.json
-node -e "
-  import { readFileSync, writeFileSync } from 'fs';
-  const json = JSON.parse(readFileSync('package.json', 'utf8'));
-  json.version = '${VERSION}';
-  writeFileSync('package.json', JSON.stringify(json, null, 2) + '\n');
-  console.log('  package.json ✓');
-"
+  # Update package.json
+  node -e "
+    import { readFileSync, writeFileSync } from 'fs';
+    const json = JSON.parse(readFileSync('package.json', 'utf8'));
+    json.version = '${VERSION}';
+    writeFileSync('package.json', JSON.stringify(json, null, 2) + '\n');
+    console.log('  package.json ✓');
+  "
+
+  # Update package-lock.json if present
+  if [[ -f package-lock.json ]]; then
+    node -e "
+      import { readFileSync, writeFileSync } from 'fs';
+      const json = JSON.parse(readFileSync('package-lock.json', 'utf8'));
+      json.version = '${VERSION}';
+      if (json.packages?.['']) json.packages[''].version = '${VERSION}';
+      writeFileSync('package-lock.json', JSON.stringify(json, null, 2) + '\n');
+      console.log('  package-lock.json ✓');
+    "
+  fi
+fi
 
 # --- Build ---
 
@@ -175,8 +206,13 @@ echo "  $(du -h "$FIREFOX_XPI" | cut -f1) $FIREFOX_XPI"
 
 # --- Commit version bump & tag ---
 
-git add manifests/base.json package.json
-git commit -m "Release $TAG"
+if [[ "$NO_BUMP" == true ]]; then
+  echo "Skipping version bump commit (--nobump)."
+else
+  git add manifests/base.json package.json
+  [[ -f package-lock.json ]] && git add package-lock.json
+  git commit -m "Release $TAG"
+fi
 git tag -a "$TAG" -m "Release $TAG"
 
 echo "Created tag $TAG"
