@@ -283,13 +283,13 @@ The server (`server/src/index.js`) is a Cloudflare Worker + Durable Object:
 
 ### Message Size Limit
 
-Messages are limited to **16KB** (the `game-init` message with 73+ card IDs
-is typically ~3KB).
+Messages are limited to **64KB**. Full gifted-card payloads are larger than the
+small game setup messages because they may include card face/image metadata.
 
 ### Valid Message Types
 
 `join`, `game-init`, `game-ready`, `game-start`, `zone-sync`, `life-sync`,
-`drawCard`, `discard`
+`hand-count-sync`, `ping`, `drawCard`, `discard`
 
 ### Join Messages
 
@@ -346,6 +346,16 @@ Start. In Traditional, life is initialized and broadcast immediately after
 joining. Ongoing changes are detected via `componentDidUpdate` and forwarded
 automatically.
 
+## Hand Count Sync
+
+Each player row also displays the number of cards in that player's hand with a
+🃏 icon. Hand counts are initialized when the game starts or a Traditional room
+is joined, then updated whenever cards enter or leave the local hand:
+
+```json
+{ "type": "hand-count-sync", "handCount": 7 }
+```
+
 ## Opponent Zone Views
 
 Players can voluntarily reveal their hand by clicking a remote player's name
@@ -372,6 +382,24 @@ opponent's menu. These are pull-based: the local client sends a targeted
 response is routed back only to the requester. Graveyard/exile results display
 as a vertical scrollable stack with overlapped cards; hovering a card expands it
 to full height.
+
+## Traditional Card Gifting
+
+In Traditional games, MoxMox augments Moxfield card context menus with
+**Give to <Opponent>** entries after the existing "Move To..." actions. Giving a
+card removes it locally and sends a targeted `gift-card` `zone-sync` payload
+containing the exact card state, so the recipient can render it even if it is not
+in their deck. The recipient receives the card in the center of their
+battlefield with ownership metadata.
+
+If a gifted card is moved into the recipient's hand, library, graveyard, or
+exile, MoxMox removes it from the recipient and sends a targeted `gift-return`
+payload so it appears in that same zone for the original owner.
+
+The recipient can also use the same context menu to give the card back to its
+original owner. In that case MoxMox sends a targeted
+`gift-return-battlefield` payload, removes the local gifted copy, and restores
+the card to the owner's battlefield without gift metadata.
 
 ## Username System
 

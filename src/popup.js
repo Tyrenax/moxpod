@@ -109,15 +109,18 @@ function updatePanel(state) {
     <div class="status-row">
       <span class="status-label">${escapeHtml(player.username || 'Player')}</span>
       <span class="dot ${player.connected === false ? '' : 'green'}"></span>
-      <span class="status-value">${player.life != null ? `Life ${player.life}` : statusText(player.connected === false ? 'disconnected' : 'connected')}</span>
+      <span class="status-value">${playerStatusText(player)}</span>
     </div>
   `).join('');
+  const localExtras = [
+    state.localHandCount != null ? `Hand ${state.localHandCount}` : '',
+  ].filter(Boolean).join(' · ');
 
   panelEl.innerHTML = `
     <div class="status-row">
       <span class="status-label">You</span>
       <span class="dot ${dotClass(state.localStatus)}"></span>
-      <span class="status-value">${statusText(state.localStatus)}</span>
+      <span class="status-value">${localExtras || statusText(state.localStatus)}</span>
     </div>
     <div class="status-row">
       <span class="status-label">Opponent</span>
@@ -150,6 +153,13 @@ function updatePanel(state) {
     }
     ${playerRows}
   `;
+}
+
+function playerStatusText(player) {
+  const parts = [];
+  if (player.life != null) parts.push(`Life ${player.life}`);
+  if (player.handCount != null) parts.push(`Hand ${player.handCount}`);
+  return parts.join(' · ') || statusText(player.connected === false ? 'disconnected' : 'connected');
 }
 
 function escapeHtml(value) {

@@ -16,16 +16,20 @@ selection highlights, and on-demand hand reveal in sync for two players.
 
 **Traditional** supports 2-4 players with separate decks. It does not sync
 cards, shared zones, battlefield state, or the battlefield divider; it still
-syncs life totals and lets a player reveal their hand to a chosen opponent.
+syncs life totals and hand counts, and lets a player reveal their hand to a
+chosen opponent.
 
 ## Features
 
 - **Shared Deck mode**: Library, graveyard, exile, and battlefield state are synchronized
-- **Traditional mode**: Short room codes, 2-4 players, separate decks, life sync only
+- **Traditional mode**: Short room codes, 2-4 players, separate decks, life and hand-count sync
 - **Private hands**: Each player's hand is invisible to the opponent
 - **Battlefield sync**: Card positions, tap/untap, face-up/down, counters,
   and power/toughness are synced continuously
 - **Life total sync**: Players see each other's life totals in real time
+- **Hand count sync**: Players see each other's current number of cards in hand
+- **Traditional card gifting**: Give a card to an opponent, then have it return
+  to your matching zone if it leaves their battlefield
 - **Show Hand**: Reveal your hand to a chosen opponent on demand
 - **Selection highlighting**: When you select cards, your opponent sees a
   blue outline on the corresponding cards

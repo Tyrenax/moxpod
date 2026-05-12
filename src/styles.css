@@ -112,10 +112,26 @@
   gap: 2px;
 }
 
+.moxmox-hand-count {
+  margin-left: 6px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.7);
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+}
+
 .moxmox-life-value {
   display: inline-block;
   min-width: 18px;
   text-align: right;
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+}
+
+.moxmox-hand-count-value {
+  display: inline-block;
+  text-align: left;
   font-family: 'SF Mono', Menlo, Consolas, monospace;
 }
 
@@ -195,6 +211,16 @@
 
 .moxmox-menu-item:hover {
   background: rgba(255, 255, 255, 0.08);
+}
+
+.moxmox-gift-menu-separator {
+  height: 1px;
+  margin: 4px 8px;
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.moxmox-gift-menu-item {
+  cursor: pointer;
 }
 
 /* Status dots container */

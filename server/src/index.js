@@ -8,6 +8,7 @@ const GAME_TYPE_SHARED = 'shared';
 const GAME_TYPE_TRADITIONAL = 'traditional';
 const VALID_GAME_TYPES = new Set([GAME_TYPE_SHARED, GAME_TYPE_TRADITIONAL]);
 const TRADITIONAL_ROOM_RE = /^[A-HJ-NP-Z2-9]{6}$/;
+const MAX_MESSAGE_BYTES = 65536;
 
 export default {
   async fetch(request, env) {
@@ -37,7 +38,7 @@ export default {
 const VALID_TYPES = new Set([
   'drawCard', 'discard', 'join', 'ping',
   'game-init', 'game-ready', 'game-start',
-  'zone-sync', 'life-sync',
+  'zone-sync', 'life-sync', 'hand-count-sync',
 ]);
 
 function json(body, status = 200) {
@@ -257,7 +258,7 @@ export class Room {
 
   async webSocketMessage(ws, message) {
     if (typeof message !== 'string') return;
-    if (message.length > 16384) return;
+    if (message.length > MAX_MESSAGE_BYTES) return;
 
     let parsed;
     try {

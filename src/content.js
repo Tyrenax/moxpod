@@ -26,6 +26,7 @@ const GAME_TYPE_TRADITIONAL = 'traditional';
 const WS_HEARTBEAT_MS = 25000;
 const WS_RECONNECT_MS = 2000;
 const URL_CHECK_MS = 500;
+const GIFT_RETURN_ZONES = new Set(['hand', 'graveyard', 'exile', 'library']);
 
 // ── State ───────────────────────────────────────────────────────────
 
@@ -38,7 +39,9 @@ let playerGridEl = null;
 let remotePlayerRow = null;
 let remoteNameEl = null;
 let localLifeEl = null;
+let localHandCountEl = null;
 let remoteLifeEl = null;
+let localHandCount = null;
 let menuEl = null;
 let popupBackdrop = null;
 let role = null;         // 'host' or 'guest'
@@ -103,11 +106,13 @@ function resetRoomState(nextGameType) {
   playerKey = null;
   localPlayerId = null;
   maxPlayers = null;
+  localHandCount = null;
   remotePlayers = new Map();
   traditionalLifeInitialized = false;
   gameStarted = false;
   gameSetupDone = false;
   setRemotePlayersDisplay([]);
+  syncGiftStateToMain();
   sessionStorage.removeItem(SESSION_PLAYER_KEY);
   gameType = nextGameType;
 }
@@ -249,8 +254,15 @@ function handleMainMessage(e) {
     case 'game-event':
       if (gameStarted) handleLocalGameEvent(e.data.event);
       break;
+    case 'gift-card':
+      sendGiftCard(e.data.targetId, e.data.gift);
+      break;
+    case 'gift-return-battlefield':
+      sendGiftReturnToBattlefield(e.data.targetId, e.data.gift);
+      break;
     case 'ready':
       console.log('[MoxMox] MAIN-world bridge ready');
+      syncGiftStateToMain();
       break;
   }
 }
@@ -328,9 +340,14 @@ function injectButton(zoomElement) {
   localLifeEl.className = 'moxmox-life';
   localLifeEl.textContent = '';
 
+  localHandCountEl = document.createElement('span');
+  localHandCountEl.className = 'moxmox-hand-count';
+  localHandCountEl.textContent = '';
+
   localRow.appendChild(localDot);
   localRow.appendChild(localNameEl);
   localRow.appendChild(localLifeEl);
+  localRow.appendChild(localHandCountEl);
 
   // Load and display username (or show "Set Username" button).
   refreshLocalUsername();
@@ -378,6 +395,7 @@ function removeWidget() {
   remotePlayerRow = null;
   remoteNameEl = null;
   localLifeEl = null;
+  localHandCountEl = null;
   remoteLifeEl = null;
   if (menuEl) {
     menuEl.remove();
@@ -414,7 +432,8 @@ function setRemotePlayerDisplay(name, id = 'opponent') {
   if (!name) {
     remotePlayers.delete(id);
   } else {
-    remotePlayers.set(id, { id, username: name, connected: true });
+    const existing = remotePlayers.get(id) || {};
+    remotePlayers.set(id, { ...existing, id, username: name, connected: true });
   }
   setRemotePlayersDisplay([...remotePlayers.values()]);
 }
@@ -470,11 +489,36 @@ function setRemotePlayersDisplay(players) {
     lifeEl.innerHTML = player.life != null
       ? `❤️ <span class="moxmox-life-value">${player.life}</span>` : '';
 
+    const handCountEl = document.createElement('span');
+    handCountEl.className = 'moxmox-hand-count';
+    handCountEl.innerHTML = player.handCount != null
+      ? `🃏 <span class="moxmox-hand-count-value">${player.handCount}</span>` : '';
+
     row.appendChild(dot);
     row.appendChild(nameEl);
     row.appendChild(lifeEl);
+    row.appendChild(handCountEl);
     remotePlayerRow.appendChild(row);
   }
+  syncGiftStateToMain();
+}
+
+async function syncGiftStateToMain() {
+  const enabled = !!currentRoomId && gameType === GAME_TYPE_TRADITIONAL;
+  const opponents = enabled
+    ? [...remotePlayers.values()]
+      .filter(player => player.id && player.connected !== false)
+      .map(player => ({ id: player.id, username: player.username || 'Opponent' }))
+    : [];
+  window.postMessage({
+    moxmox: MSG_TAG,
+    from: 'isolated',
+    type: 'gift-state',
+    enabled,
+    localPlayerId,
+    localUsername: await getLocalUsername(),
+    opponents,
+  }, '*');
 }
 
 let remoteMenuEl = null;
@@ -576,6 +620,33 @@ function requestOpponentZone(targetId, zone) {
     zone,
   });
   addLog('out', `SEND: requested ${player?.username || targetId}'s ${zone}`);
+}
+
+function sendGiftCard(targetId, gift) {
+  if (gameType !== GAME_TYPE_TRADITIONAL || !targetId || !gift) return;
+  const player = remotePlayers.get(targetId);
+  sendWs({
+    type: 'zone-sync',
+    action: 'gift-card',
+    targetId,
+    gift,
+  });
+  if (gift.fromZone === 'hand') {
+    broadcastCurrentHandCount();
+  }
+  addLog('out', `SEND: gifted ${gift.card?.name || 'card'} to ${player?.username || targetId}`);
+}
+
+function sendGiftReturnToBattlefield(targetId, gift) {
+  if (gameType !== GAME_TYPE_TRADITIONAL || !targetId || !gift) return;
+  const player = remotePlayers.get(targetId);
+  sendWs({
+    type: 'zone-sync',
+    action: 'gift-return-battlefield',
+    targetId,
+    gift,
+  });
+  addLog('out', `SEND: returned ${gift.card?.name || 'gifted card'} to ${player?.username || targetId}'s battlefield`);
 }
 
 async function getLocalUsername() {
@@ -727,6 +798,14 @@ function updateLocalLife(life) {
   }
 }
 
+function updateLocalHandCount(count) {
+  localHandCount = count;
+  if (localHandCountEl) {
+    localHandCountEl.innerHTML = count != null
+      ? `🃏 <span class="moxmox-hand-count-value">${count}</span>` : '';
+  }
+}
+
 function updateRemoteLife(life, senderId = null, username = null) {
   const id = senderId || 'opponent';
   const existing = remotePlayers.get(id) || { id, username: username || remoteUsername || 'Opponent' };
@@ -735,6 +814,18 @@ function updateRemoteLife(life, senderId = null, username = null) {
     username: username || existing.username,
     connected: true,
     life,
+  });
+  setRemotePlayersDisplay([...remotePlayers.values()]);
+}
+
+function updateRemoteHandCount(count, senderId = null, username = null) {
+  const id = senderId || 'opponent';
+  const existing = remotePlayers.get(id) || { id, username: username || remoteUsername || 'Opponent' };
+  remotePlayers.set(id, {
+    ...existing,
+    username: username || existing.username,
+    connected: true,
+    handCount: count,
   });
   setRemotePlayersDisplay([...remotePlayers.values()]);
 }
@@ -973,8 +1064,9 @@ function handleServerMessage(data) {
       if (msg.username) {
         setRemotePlayerDisplay(msg.username, msg.senderId || 'opponent');
       }
-      if (gameType === GAME_TYPE_TRADITIONAL) {
+      if (gameType === GAME_TYPE_TRADITIONAL || gameStarted) {
         broadcastCurrentLife();
+        broadcastCurrentHandCount();
       }
       addLog('in', `RECV: join (${msg.username || 'Anonymous'})`);
       break;
@@ -999,6 +1091,9 @@ function handleServerMessage(data) {
       break;
     case 'life-sync':
       updateRemoteLife(msg.life, msg.senderId, msg.username);
+      break;
+    case 'hand-count-sync':
+      updateRemoteHandCount(msg.handCount, msg.senderId, msg.username);
       break;
     case 'pong':
       break;
@@ -1072,6 +1167,7 @@ function activateTraditionalGame() {
   gameStarted = true;
   gameSetupDone = true;
   broadcastCurrentLife();
+  broadcastCurrentHandCount();
 }
 
 function broadcastCurrentLife() {
@@ -1079,6 +1175,21 @@ function broadcastCurrentLife() {
     if (result?.life != null) {
       updateLocalLife(result.life);
       sendWs({ type: 'life-sync', life: result.life });
+    }
+  }).catch(() => {});
+}
+
+function broadcastCurrentHandCount(count = null) {
+  if (count != null) {
+    updateLocalHandCount(count);
+    sendWs({ type: 'hand-count-sync', handCount: count });
+    return;
+  }
+
+  sendCmd('get-hand-count').then(result => {
+    if (result?.handCount != null) {
+      updateLocalHandCount(result.handCount);
+      sendWs({ type: 'hand-count-sync', handCount: result.handCount });
     }
   }).catch(() => {});
 }
@@ -1195,6 +1306,7 @@ function showGameModal() {
         sendWs({ type: 'life-sync', life: result.life });
       }
     }).catch(() => {});
+    broadcastCurrentHandCount();
   });
 
   popup.appendChild(heading);
@@ -1329,6 +1441,33 @@ async function handleLocalGameEvent(event) {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
 
   const { type, card, fromZone, toZone } = event;
+  if (
+    gameType === GAME_TYPE_TRADITIONAL &&
+    type === 'card:zone-changed' &&
+    card?.moxmoxGift?.ownerId &&
+    card.moxmoxGift.ownerId !== localPlayerId &&
+    GIFT_RETURN_ZONES.has(toZone)
+  ) {
+    sendWs({
+      type: 'zone-sync',
+      action: 'gift-return',
+      targetId: card.moxmoxGift.ownerId,
+      zone: toZone,
+      gift: card.gift,
+    });
+    await sendCmd('gift-remove', { giftId: card.moxmoxGift.giftId });
+    if (toZone === 'hand') {
+      broadcastCurrentHandCount();
+    }
+    addLog('out', `SEND: returned ${card.name || 'gifted card'} to ${toZone}`);
+    return;
+  }
+  const handChanged =
+    (type === 'card:zone-changed' && (fromZone === 'hand' || toZone === 'hand')) ||
+    (type === 'card:removed' && event.fromZone === 'hand');
+  if (handChanged) {
+    broadcastCurrentHandCount(event.handCount);
+  }
 
   if (gameType === GAME_TYPE_TRADITIONAL) {
     if (type === 'life:changed') {
@@ -1438,7 +1577,10 @@ function clamp(n, min, max) {
 
 async function handleRemoteSync(msg) {
   try {
-    const traditionalActions = new Set(['reveal-hand', 'request-zone-view', 'zone-view']);
+    const traditionalActions = new Set([
+      'reveal-hand', 'request-zone-view', 'zone-view',
+      'gift-card', 'gift-return', 'gift-return-battlefield',
+    ]);
     if (gameType === GAME_TYPE_TRADITIONAL && !traditionalActions.has(msg.action)) {
       return;
     }
@@ -1516,6 +1658,24 @@ async function handleRemoteSync(msg) {
         if (gameType !== GAME_TYPE_TRADITIONAL) break;
         await showZoneViewer(msg.cards || [], msg.username || 'Opponent', msg.zone);
         addLog('in', `RECV: ${msg.username || 'Opponent'} ${msg.zone} (${msg.cards?.length || 0} cards)`);
+        break;
+      case 'gift-card':
+        if (gameType !== GAME_TYPE_TRADITIONAL || !msg.gift) break;
+        await sendCmd('gift-add-battlefield', { gift: msg.gift });
+        addLog('in', `RECV: gifted ${msg.gift.card?.name || 'card'}`);
+        break;
+      case 'gift-return':
+        if (gameType !== GAME_TYPE_TRADITIONAL || !msg.gift || !GIFT_RETURN_ZONES.has(msg.zone)) break;
+        await sendCmd('gift-add-zone', { zone: msg.zone, gift: msg.gift });
+        if (msg.zone === 'hand') {
+          broadcastCurrentHandCount();
+        }
+        addLog('in', `RECV: returned ${msg.gift.card?.name || 'gifted card'} to ${msg.zone}`);
+        break;
+      case 'gift-return-battlefield':
+        if (gameType !== GAME_TYPE_TRADITIONAL || !msg.gift) break;
+        await sendCmd('gift-add-battlefield', { gift: msg.gift, preserveGift: false });
+        addLog('in', `RECV: returned ${msg.gift.card?.name || 'gifted card'} to battlefield`);
         break;
     }
   } catch (err) {
@@ -2073,6 +2233,7 @@ function leaveCurrentGame() {
   gameType = null;
   maxPlayers = null;
   localPlayerId = null;
+  localHandCount = null;
   remoteUsername = null;
   remotePlayers = new Map();
   traditionalLifeInitialized = false;
@@ -2086,7 +2247,9 @@ function leaveCurrentGame() {
 
   setLocalStatus('disconnected');
   setRemoteStatus('disconnected');
+  updateLocalHandCount(null);
   setRemotePlayersDisplay([]);
+  syncGiftStateToMain();
   addLog('out', 'Left game');
   notifyPopup();
 }
@@ -2142,6 +2305,7 @@ function notifyPopup() {
     gameType,
     maxPlayers,
     roomId: currentRoomId,
+    localHandCount,
     players: [...remotePlayers.values()],
     log: messageLog,
     isGoldfish: true,
@@ -2159,6 +2323,7 @@ function handlePopupMessage(message, _sender, sendResponse) {
       gameType,
       maxPlayers,
       roomId: currentRoomId,
+      localHandCount,
       players: [...remotePlayers.values()],
       log: messageLog,
       isGoldfish: true,

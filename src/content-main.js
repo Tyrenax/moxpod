@@ -9,6 +9,7 @@ import { PlaytestController } from './playtest/index.js';
 const SHARED_ZONES = new Set(['library', 'graveyard', 'exile']);
 const MSG_TAG = 'moxmox';
 const URL_CHECK_MS = 500;
+const GIFT_RETURN_ZONES = new Set(['hand', 'graveyard', 'exile', 'library']);
 
 let controller = null;
 let syncDepth = 0;
@@ -19,6 +20,10 @@ let controllerInitInProgress = false;
 let forwardedController = null;
 let lastSeenUrl = window.location.href;
 let selectionPollTimer = null;
+let giftState = { enabled: false, localPlayerId: null, opponents: [] };
+let lastContextCard = null;
+let lastContextPoint = null;
+let giftMenuObserver = null;
 
 // Promise that resolves when the controller is initialized.
 resetControllerReady();
@@ -105,6 +110,13 @@ window.addEventListener('message', (e) => {
   if (e.data?.moxmox !== MSG_TAG) return;
   if (e.data?.from === 'isolated' && e.data.type === 'cmd') {
     handleCommand(e.data.id, e.data.action, e.data.params || {});
+  } else if (e.data?.from === 'isolated' && e.data.type === 'gift-state') {
+    giftState = {
+      enabled: !!e.data.enabled,
+      localPlayerId: e.data.localPlayerId || null,
+      localUsername: e.data.localUsername || 'Opponent',
+      opponents: Array.isArray(e.data.opponents) ? e.data.opponents : [],
+    };
   }
 });
 
@@ -146,8 +158,14 @@ async function dispatch(action, params) {
     case 'sync-update-state': return await withSync(() => syncUpdateCardState(params.syncId, params.updates));
     case 'get-battlefield-size': return getBattlefieldSize();
     case 'get-life': return { life: getInstance().state.life };
+    case 'get-hand-count': return { handCount: getHandCount() };
     case 'get-hand-cards': return getHandCards();
     case 'get-zone-cards': return getZoneCards(params.zone);
+    case 'gift-add-battlefield': return await withSync(() => addGiftedCardToBattlefield(params.gift, {
+      preserveGift: params.preserveGift !== false,
+    }));
+    case 'gift-add-zone': return await withSync(() => addGiftedCardToZone(params.zone, params.gift));
+    case 'gift-remove': return await withSync(() => removeGiftedCard(params.giftId));
     case 'apply-remote-highlight': return applyRemoteHighlight(params.syncIds);
     case 'inject-divider': return injectBattlefieldDivider();
     case 'discard-save-state': return discardSaveState();
@@ -174,6 +192,9 @@ function setupEventForwarding() {
   controller.on('card:zone-changed', (ev) => {
     if (syncDepth > 0) return;
     const clean = sanitizeEvent(ev);
+    if (ev.fromZone === 'hand' || ev.toZone === 'hand') {
+      clean.handCount = getHandCount();
+    }
     if (ev.toZone === 'battlefield' && ev.card) {
       clean.card.top = ev.card.top;
       clean.card.left = ev.card.left;
@@ -182,7 +203,11 @@ function setupEventForwarding() {
   });
   controller.on('card:removed', (ev) => {
     if (syncDepth > 0) return;
-    post({ type: 'game-event', event: sanitizeEvent(ev) });
+    const clean = sanitizeEvent(ev);
+    if (ev.fromZone === 'hand') {
+      clean.handCount = getHandCount();
+    }
+    post({ type: 'game-event', event: clean });
   });
   controller.on('card:state-changed', (ev) => {
     if (syncDepth > 0) {
@@ -246,6 +271,13 @@ function sanitizeEvent(ev) {
   if (ev.toZone) clean.toZone = ev.toZone;
   if (ev.card) {
     clean.card = { id: ev.card.id, name: ev.card.name, syncId: ev.card.syncId };
+    if (ev.card.moxmoxGift) {
+      clean.card.moxmoxGift = ev.card.moxmoxGift;
+      clean.card.gift = {
+        ...ev.card.moxmoxGift,
+        card: serializeGiftCard(ev.card),
+      };
+    }
   }
   return clean;
 }
@@ -306,10 +338,210 @@ function applyRemoteHighlight(syncIds) {
   return { ok: true };
 }
 
+// ── Gift context menu ────────────────────────────────────────────────
+
+function startGiftMenuIntegration() {
+  document.addEventListener('contextmenu', (event) => {
+    captureCardInteraction(event);
+  }, true);
+  document.addEventListener('pointerdown', (event) => {
+    captureCardInteraction(event);
+  }, true);
+  document.addEventListener('click', (event) => {
+    captureCardInteraction(event);
+  }, true);
+
+  giftMenuObserver = new MutationObserver(() => injectGiftMenuItems());
+  if (document.body) {
+    giftMenuObserver.observe(document.body, { childList: true, subtree: true });
+  } else {
+    document.addEventListener('DOMContentLoaded', () => {
+      giftMenuObserver.observe(document.body, { childList: true, subtree: true });
+    }, { once: true });
+  }
+}
+
+function captureCardInteraction(event) {
+  if (event.target instanceof Element && event.target.closest('.moxmox-gift-menu-item')) return;
+  const card = findCardFromElement(event.target) ||
+    findCardFromPoint(event.clientX, event.clientY);
+  if (!card) return;
+
+  lastContextPoint = { x: event.clientX, y: event.clientY };
+  lastContextCard = card;
+  for (const delay of [0, 50, 150, 300]) {
+    setTimeout(injectGiftMenuItems, delay);
+  }
+}
+
+function findCardFromElement(element) {
+  if (!controller?.isAvailable()) return null;
+  let el = element instanceof Element ? element : element?.parentElement;
+  while (el) {
+    const card = findCardFromFiberElement(el);
+    if (card) return card;
+    el = el.parentElement;
+  }
+  return null;
+}
+
+function findCardFromPoint(x, y) {
+  if (!controller?.isAvailable()) return null;
+  for (const element of document.elementsFromPoint(x, y)) {
+    const card = findCardFromElement(element);
+    if (card) return card;
+  }
+  return null;
+}
+
+function findCardFromFiberElement(element) {
+  const fiberKey = Object.keys(element).find(k => k.startsWith('__reactFiber'));
+  if (!fiberKey) return null;
+
+  let current = element[fiberKey];
+  for (let depth = 0; depth < 50 && current; depth++) {
+    const props = current.memoizedProps || current.pendingProps;
+    const zoneId = props?.card?.zoneId || props?.id;
+    if (zoneId) {
+      const card = controller.findCardByZoneId(zoneId);
+      if (card) return card;
+    }
+    current = current.return;
+  }
+  return null;
+}
+
+function injectGiftMenuItems() {
+  if (!lastContextCard && lastContextPoint) {
+    lastContextCard = findCardFromPoint(lastContextPoint.x, lastContextPoint.y);
+  }
+  if (!giftState.enabled || giftState.opponents.length === 0 || !lastContextCard) return;
+  const giftOpponents = getGiftMenuOpponents(lastContextCard);
+  if (giftOpponents.length === 0) return;
+
+  const moveItems = findMoveToMenuItems();
+  for (const { parent, items } of moveItems) {
+    if (parent.querySelector('.moxmox-gift-menu-item')) continue;
+    const contextZoneId = lastContextCard.zoneId;
+    const fragment = document.createDocumentFragment();
+    const separator = document.createElement('div');
+    separator.className = 'moxmox-gift-menu-separator';
+    separator.setAttribute('role', 'separator');
+    fragment.appendChild(separator);
+
+    for (const opponent of giftOpponents) {
+      const item = items[items.length - 1].cloneNode(true);
+      item.classList.add('moxmox-gift-menu-item');
+      item.textContent = `Give to ${opponent.username || 'Opponent'}`;
+      item.addEventListener('mousedown', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      }, true);
+      item.addEventListener('click', async (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        await giveCardToOpponent(opponent.id, contextZoneId);
+      }, true);
+      fragment.appendChild(item);
+    }
+
+    const trailingSeparator = document.createElement('div');
+    trailingSeparator.className = 'moxmox-gift-menu-separator';
+    trailingSeparator.setAttribute('role', 'separator');
+    fragment.appendChild(trailingSeparator);
+
+    parent.insertBefore(fragment, items[items.length - 1].nextSibling);
+  }
+}
+
+function getGiftMenuOpponents(card) {
+  const ownerId = card?.moxmoxGift?.ownerId;
+  if (!ownerId) return giftState.opponents;
+  return giftState.opponents.filter(opponent => opponent.id === ownerId);
+}
+
+function findMoveToMenuItems() {
+  const candidates = [...document.querySelectorAll('button, a, [role="menuitem"], [tabindex], li, div, span')]
+    .filter(el => {
+      const text = (el.textContent || '').trim();
+      return isVisible(el) && text.length < 100 && /^Move\s+To\b/i.test(text);
+    });
+  const byParent = new Map();
+  for (const candidate of candidates) {
+    const item = candidate.closest('button, a, [role="menuitem"], [tabindex], li') ||
+      candidate.closest('div') ||
+      candidate;
+    const parent = item.parentElement;
+    if (!parent) continue;
+    if (!byParent.has(parent)) byParent.set(parent, []);
+    const items = byParent.get(parent);
+    if (!items.includes(item)) items.push(item);
+  }
+
+  return [...byParent.entries()]
+    .filter(([, items]) => items.length > 0)
+    .map(([parent, items]) => ({ parent, items }));
+}
+
+function isVisible(element) {
+  const rect = element.getBoundingClientRect();
+  return rect.width > 0 && rect.height > 0;
+}
+
+async function giveCardToOpponent(targetId, zoneId) {
+  if (!targetId || !zoneId || !giftState.enabled || !giftState.localPlayerId) return;
+  await controllerReady;
+  const result = await withSync(async () => {
+    const found = controller.findCardByZoneId(zoneId);
+    if (!found) throw new Error('Card no longer exists');
+    if (found.moxmoxGift) {
+      if (found.moxmoxGift.ownerId !== targetId) {
+        throw new Error('Gifted cards can only be returned to their owner');
+      }
+      const gift = {
+        ...found.moxmoxGift,
+        card: serializeGiftCard(found),
+      };
+      await removeCardByZoneId(zoneId);
+      return { type: 'gift-return-battlefield', gift };
+    }
+    const giftId = found.syncId || generateZoneId();
+    const card = { ...found, syncId: giftId };
+    await removeCardByZoneId(zoneId);
+    return { type: 'gift-card', gift: {
+      ownerId: giftState.localPlayerId,
+      ownerUsername: giftState.localUsername || 'Opponent',
+      giftId,
+      fromZone: found.zone,
+      card: serializeGiftCard(card),
+    } };
+  });
+  post({ type: result.type, targetId, gift: result.gift });
+}
+
+async function removeCardByZoneId(zoneId) {
+  const zones = getInstance().state.zones;
+  const updates = {};
+  let removed = 0;
+  for (const [zone, cards] of Object.entries(zones)) {
+    const filtered = cards.filter(card => card.zoneId !== zoneId);
+    if (filtered.length !== cards.length) {
+      updates[zone] = filtered;
+      removed += cards.length - filtered.length;
+    }
+  }
+  if (removed === 0) throw new Error(`Card with zoneId "${zoneId}" not found`);
+  await setState(updates);
+}
+
 // ── Game operations ─────────────────────────────────────────────────
 
 function getHandCards() {
   return getZoneCards('hand');
+}
+
+function getHandCount() {
+  return getInstance().state.zones.hand.length;
 }
 
 function getZoneCards(zone) {
@@ -326,6 +558,86 @@ function getZoneCards(zone) {
       card_faces: c.card_faces,
     })),
   };
+}
+
+function serializeGiftCard(card) {
+  const clone = JSON.parse(JSON.stringify(card));
+  delete clone.zoneId;
+  delete clone.top;
+  delete clone.left;
+  delete clone.zone;
+  return clone;
+}
+
+function materializeGiftedCard(gift, zone, { preserveGift = true } = {}) {
+  if (!gift?.card || !gift.ownerId || !gift.giftId) {
+    throw new Error('Invalid gifted card payload');
+  }
+
+  const card = {
+    ...JSON.parse(JSON.stringify(gift.card)),
+    zone,
+    syncId: gift.giftId,
+    zoneId: generateZoneId(),
+  };
+  delete card.moxmoxGift;
+  if (preserveGift) {
+    card.moxmoxGift = {
+      ownerId: gift.ownerId,
+      ownerUsername: gift.ownerUsername || 'Opponent',
+      giftId: gift.giftId,
+    };
+  }
+  return card;
+}
+
+async function addGiftedCardToBattlefield(gift, { preserveGift = true } = {}) {
+  const size = getBattlefieldSize();
+  const card = {
+    ...materializeGiftedCard(gift, 'battlefield', { preserveGift }),
+    top: Math.max(0, Math.round((size.height - size.cardH) / 2)),
+    left: Math.max(0, Math.round((size.usableWidth - size.cardW) / 2)),
+    tapped: false,
+    flipped: false,
+    rotated: false,
+    doesntUntap: false,
+  };
+  const bf = [...getInstance().state.zones.battlefield, card];
+  await setState({ battlefield: bf });
+  return { ok: true };
+}
+
+async function addGiftedCardToZone(zone, gift) {
+  if (!GIFT_RETURN_ZONES.has(zone)) {
+    return { error: `Unsupported gift return zone: ${zone}` };
+  }
+  const card = materializeGiftedCard(gift, zone, { preserveGift: false });
+  card.top = undefined;
+  card.left = undefined;
+  card.tapped = false;
+  card.flipped = false;
+  card.rotated = false;
+  card.doesntUntap = false;
+  const cards = [...getInstance().state.zones[zone], card];
+  await setState({ [zone]: cards });
+  return { ok: true };
+}
+
+async function removeGiftedCard(giftId) {
+  if (!giftId) return { error: 'Missing giftId' };
+  const zones = getInstance().state.zones;
+  const updates = {};
+  let removed = 0;
+  for (const [zone, cards] of Object.entries(zones)) {
+    const filtered = cards.filter(card => card.moxmoxGift?.giftId !== giftId);
+    if (filtered.length !== cards.length) {
+      updates[zone] = filtered;
+      removed += cards.length - filtered.length;
+    }
+  }
+  if (removed === 0) return { error: `Gifted card ${giftId} not found` };
+  await setState(updates);
+  return { ok: true, removed };
 }
 
 function setState(zoneUpdates) {
@@ -603,6 +915,7 @@ function assignSyncIds(zone) {
 // ── Start ───────────────────────────────────────────────────────────
 
 watchForPlaytestNavigation();
+startGiftMenuIntegration();
 ensureControllerInitialized();
 
 function watchForPlaytestNavigation() {

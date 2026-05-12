@@ -120,7 +120,7 @@ new_sqlite_classes = ["Room"]
    room.
    - `fetch()` — accepts WebSocket upgrades, creates Traditional rooms with
      `POST /room/:roomId`, and returns room metadata with `GET /room/:roomId`.
-   - `webSocketMessage()` — validates incoming messages (must be JSON, ≤16KB,
+   - `webSocketMessage()` — validates incoming messages (must be JSON, ≤64KB,
      known type), stamps relayed messages with sender identity, then relays to
      other authenticated connections.
    - `webSocketClose()` — notifies remaining users that someone left.
@@ -147,6 +147,7 @@ All messages are JSON strings sent over the WebSocket.
 | `game-init` / `game-ready` / `game-start` | Shared Deck setup payloads | Coordinate the two-player shared-deck opening flow |
 | `zone-sync` | Zone, battlefield, highlight, reveal, or zone-view payload | Sync Shared Deck card state, targeted hand reveal, or Traditional graveyard/exile view requests |
 | `life-sync` | `{"type":"life-sync","life":40}` | Sync a player's current life total |
+| `hand-count-sync` | `{"type":"hand-count-sync","handCount":7}` | Sync a player's current hand size |
 | `ping` | `{"type":"ping","t":123}` | Keepalive heartbeat; server replies with `pong` and does not relay |
 
 **Server → Client (system messages, not relayed):**
@@ -156,7 +157,7 @@ All messages are JSON strings sent over the WebSocket.
 | `system` | `{"type":"system","text":"...","gameType":"traditional","players":[...]}` | Join/leave notifications with room metadata and player list |
 
 The server validates that relayed messages have a known `type` and are under
-16KB. Unknown types are silently dropped. Traditional hand reveal and
+64KB. Unknown types are silently dropped. Traditional hand reveal and
 graveyard/exile view messages use a `targetId`; the Durable Object routes those
 messages only to the chosen player.
 
