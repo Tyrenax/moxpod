@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "MoxMox",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": "Nate Finch",
   "homepage_url": "https://github.com/natefinch/moxmox",
   "description": "MoxMox browser extension",
