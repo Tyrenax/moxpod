@@ -5,11 +5,14 @@
 // live pushes via chrome.runtime.onMessage so the UI updates in
 // real time without reopening the popup.
 
+const UPDATE_STATE_KEY = 'moxmox_update_state';
+
 document.addEventListener('DOMContentLoaded', async () => {
   const contentEl = document.getElementById('content');
 
   // Always show username section at the top.
   await renderUsernameSection(contentEl);
+  await renderUpdateBanner(contentEl);
 
   // Query the active tab's content script for initial state.
   const state = await queryContentScript();
@@ -46,6 +49,55 @@ async function queryContentScript() {
   } catch {
     return null;
   }
+}
+
+async function renderUpdateBanner(container) {
+  const result = await chrome.storage.local.get(UPDATE_STATE_KEY);
+  const state = result[UPDATE_STATE_KEY];
+  if (!state?.updateAvailable) return;
+
+  const banner = document.createElement('div');
+  banner.className = 'update-banner';
+
+  const title = document.createElement('div');
+  title.className = 'update-banner-title';
+  title.textContent = `MoxMox ${state.latestVersion} is available`;
+
+  const message = document.createElement('div');
+  message.textContent = isFirefox()
+    ? 'Firefox can update this signed add-on automatically. Open the release page if you want to install it now.'
+    : 'Chrome load-unpacked installs cannot auto-update. Download the new Chrome zip, replace your local folder, then click Reload in chrome://extensions.';
+
+  const actions = document.createElement('div');
+  actions.className = 'update-banner-actions';
+
+  const releaseBtn = document.createElement('button');
+  releaseBtn.textContent = 'Open release';
+  releaseBtn.addEventListener('click', () => {
+    chrome.tabs.create({ url: state.latestUrl || 'https://github.com/natefinch/moxmox/releases/latest' });
+  });
+
+  const dismissBtn = document.createElement('button');
+  dismissBtn.textContent = 'Dismiss';
+  dismissBtn.addEventListener('click', async () => {
+    await chrome.storage.local.set({
+      [UPDATE_STATE_KEY]: {
+        ...state,
+        updateAvailable: false,
+        dismissedVersion: state.latestVersion,
+      },
+    });
+    chrome.runtime.sendMessage({ type: 'moxmox:check-update-now' }).catch(() => {});
+    banner.remove();
+  });
+
+  actions.append(releaseBtn, dismissBtn);
+  banner.append(title, message, actions);
+  container.appendChild(banner);
+}
+
+function isFirefox() {
+  return !!chrome.runtime.getManifest().browser_specific_settings?.gecko;
 }
 
 // ── Rendering ─────────────────────────────────────────────────────

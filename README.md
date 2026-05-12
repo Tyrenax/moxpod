@@ -94,8 +94,14 @@ system, and event detection.
 ```bash
 ./release.sh           # bump minor version and create draft release
 ./release.sh --patch   # bump patch version
+./release.sh --nobump  # release the current manifest version
 ./release.sh --dryrun  # preview without changes
 ```
+
+Firefox release assets include `moxmox-firefox-updates.json`, which lets
+signed Firefox installs update automatically from GitHub releases. Chrome
+users who load the unpacked extension still need to replace their local folder
+and click **Reload** in `chrome://extensions`.
 
 ## License
 

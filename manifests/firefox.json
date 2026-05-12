@@ -8,6 +8,7 @@
     "gecko": {
       "id": "moxmox@natefinch.com",
       "strict_min_version": "140.0",
+      "update_url": "https://github.com/natefinch/moxmox/releases/latest/download/moxmox-firefox-updates.json",
       "data_collection_permissions": {
         "required": [
           "personallyIdentifyingInfo",

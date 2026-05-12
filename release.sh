@@ -63,6 +63,8 @@ fi
 TAG="v${VERSION}"
 CHROME_ZIP=""
 FIREFOX_XPI=""
+UPDATE_MANIFEST=""
+UPDATE_MANIFEST_NAME="moxmox-firefox-updates.json"
 UNSIGNED_FIREFOX_ZIP=""
 VERSION_FILES_UPDATED=false
 RELEASE_COMMIT_CREATED=false
@@ -79,8 +81,8 @@ if $DRYRUN; then
   echo "[dry run] Would create tag: $TAG"
   echo "[dry run] Would build Chrome and Firefox extensions"
   echo "[dry run] Would sign Firefox extension via AMO (unlisted)"
-  echo "[dry run] Would create: moxmox-chrome-${TAG}.zip, moxmox-firefox-${TAG}.xpi"
-  echo "[dry run] Would create draft GitHub release with both assets"
+  echo "[dry run] Would create: moxmox-chrome-${TAG}.zip, moxmox-firefox-${TAG}.xpi, $UPDATE_MANIFEST_NAME"
+  echo "[dry run] Would create draft GitHub release with all assets"
   echo ""
   echo "[dry run] No changes made."
   exit 0
@@ -183,6 +185,7 @@ cleanup_on_error() {
 
   [[ -n "$CHROME_ZIP" ]] && rm -f "$CHROME_ZIP"
   [[ -n "$FIREFOX_XPI" ]] && rm -f "$FIREFOX_XPI"
+  [[ -n "$UPDATE_MANIFEST" ]] && rm -f "$UPDATE_MANIFEST"
   [[ -n "$UNSIGNED_FIREFOX_ZIP" ]] && rm -f "$UNSIGNED_FIREFOX_ZIP"
   rm -rf web-ext-artifacts/
 
@@ -261,6 +264,29 @@ fi
 rm "$UNSIGNED_FIREFOX_ZIP"
 echo "  $(du -h "$FIREFOX_XPI" | cut -f1) $FIREFOX_XPI"
 
+echo "Writing Firefox update manifest..."
+UPDATE_MANIFEST="$UPDATE_MANIFEST_NAME"
+node - "$VERSION" "$TAG" "$FIREFOX_XPI" "$UPDATE_MANIFEST" <<'NODE'
+import { writeFileSync } from 'fs';
+
+const [version, tag, xpiName, output] = process.argv.slice(2);
+const updateManifest = {
+  addons: {
+    'moxmox@natefinch.com': {
+      updates: [
+        {
+          version,
+          update_link: `https://github.com/natefinch/moxmox/releases/download/${tag}/${xpiName}`,
+        },
+      ],
+    },
+  },
+};
+
+writeFileSync(output, JSON.stringify(updateManifest, null, 2) + '\n');
+NODE
+echo "  $UPDATE_MANIFEST"
+
 # --- Commit version bump & tag ---
 
 if [[ "$NO_BUMP" == true ]]; then
@@ -283,7 +309,7 @@ git push origin "$TAG"
 TAG_PUSHED=true
 
 echo "Creating draft release on GitHub..."
-gh release create "$TAG" "$CHROME_ZIP" "$FIREFOX_XPI" \
+gh release create "$TAG" "$CHROME_ZIP" "$FIREFOX_XPI" "$UPDATE_MANIFEST" \
   --repo natefinch/moxmox \
   --title "MoxMox $TAG" \
   --notes "## Installation
@@ -299,7 +325,9 @@ gh release create "$TAG" "$CHROME_ZIP" "$FIREFOX_XPI" \
 1. Download **${FIREFOX_XPI}** below
 2. Open Firefox → \`about:addons\`
 3. Click the gear icon (⚙) → **Install Add-on From File…**
-4. Select the downloaded \`.xpi\` file" \
+4. Select the downloaded \`.xpi\` file
+
+Firefox installs from v${VERSION} onward include automatic update metadata for future GitHub releases." \
   --draft
 RELEASE_CREATED=true
 
@@ -309,7 +337,7 @@ MAIN_PUSHED=true
 
 # --- Cleanup ---
 
-rm "$CHROME_ZIP" "$FIREFOX_XPI"
+rm "$CHROME_ZIP" "$FIREFOX_XPI" "$UPDATE_MANIFEST"
 CLEANUP_ACTIVE=false
 trap - EXIT
 
