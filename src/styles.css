@@ -26,10 +26,12 @@
 .moxmox-widget {
   display: flex;
   align-items: flex-start;
+  flex: 0 1 auto;
   margin-right: 8px;
   border: 1px solid rgba(255, 255, 255, 0.15);
   border-radius: 4px;
   padding: 4px 8px;
+  max-width: min(720px, 72vw);
 }
 
 .moxmox-widget-info {
@@ -40,7 +42,8 @@
   color: rgba(255, 255, 255, 0.85);
   line-height: 1.3;
   white-space: nowrap;
-  width: 100%;
+  width: max-content;
+  max-width: 100%;
 }
 
 .moxmox-widget-title {
@@ -58,17 +61,20 @@
   align-items: center;
   gap: 4px;
   min-height: 14px;
+  min-width: max-content;
 }
 
 .moxmox-player-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: max-content;
   gap: 1px 12px;
+  width: max-content;
+  max-width: 100%;
 }
 
 .moxmox-player-grid.multi {
   grid-auto-flow: column;
-  grid-auto-columns: minmax(0, 1fr);
+  grid-auto-columns: max-content;
   grid-template-rows: repeat(2, minmax(14px, auto));
 }
 
@@ -77,13 +83,18 @@
 }
 
 .moxmox-widget-player .moxmox-player-name {
-  max-width: 80px;
+  max-width: min(32ch, 34vw);
   overflow: hidden;
   text-overflow: ellipsis;
   position: relative;
 }
 
 .moxmox-remote-name-btn {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
   background: none;
   border: none;
   color: rgba(255, 255, 255, 0.85);
