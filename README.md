@@ -1,7 +1,15 @@
 # MoxMox
 
-A Chrome and Firefox browser extension that enables multiplayer Magic: The
+A Chrome and Firefox browser extension that enhances multiplayer Magic: The
 Gathering games on [Moxfield's playtest page](https://moxfield.com).
+
+## Traditional Competitive Games Like Commander:
+
+https://github.com/user-attachments/assets/c510632e-7dfd-4172-a3ee-634404ee0ef1
+
+## Shared Deck Games Like Dan Dan:
+
+https://github.com/user-attachments/assets/3e9a82cb-7dec-487e-96cc-f2c6b8189d48
 
 ## How It Works
 
@@ -11,13 +19,13 @@ Gathering games on [Moxfield's playtest page](https://moxfield.com).
 4. Guests either open the Shared Deck invite link or enter the Traditional room
    code from **Join...**
 
-**Shared Deck** keeps library, graveyard, exile, battlefield cards, life totals,
+**Shared Deck** (DanDan) keeps library, graveyard, exile, battlefield cards, life totals,
 selection highlights, and on-demand hand reveal in sync for two players.
 
-**Traditional** supports 2-4 players with separate decks. It does not sync
-cards, shared zones, battlefield state, or the battlefield divider; it still
-syncs life totals and hand counts, and lets a player reveal their hand to a
-chosen opponent.
+**Traditional** supports 2-4 players with separate decks. Shows other player's life totals 
+and hand counts, lets each player view the other player's graveyards, and lets you privately
+reveal your hand to a chosen opponent.
+
 
 ## Features
 
