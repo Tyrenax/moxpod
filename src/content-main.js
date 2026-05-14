@@ -795,7 +795,7 @@ async function syncAddToBattlefield({ cardId, syncId, top, left, rotated }) {
     tapped: false,
     flipped: false,
     rotated: !!rotated,
-    doesntUntap: false,
+    doesntUntap: !!rotated,
     top: top ?? 0,
     left: left ?? 0,
   };

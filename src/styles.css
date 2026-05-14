@@ -133,6 +133,10 @@
   gap: 1px;
 }
 
+.moxmox-life-hidden .moxmox-hand-count {
+  margin-left: auto;
+}
+
 .moxmox-life-value {
   display: inline-block;
   min-width: 18px;
@@ -597,4 +601,33 @@
   width: auto;
   border-radius: 8px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+
+/* ── Card viewer zoom controls ──────────────────────────────────── */
+
+.moxmox-card-viewer-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.moxmox-card-zoom-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+}
+
+.moxmox-card-zoom-btn:hover {
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
 }

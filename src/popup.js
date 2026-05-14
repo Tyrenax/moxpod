@@ -13,6 +13,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Always show username section at the top.
   await renderUsernameSection(contentEl);
   await renderUpdateBanner(contentEl);
+  await renderSettingsSections(contentEl);
 
   // Query the active tab's content script for initial state.
   const state = await queryContentScript();
@@ -305,4 +306,61 @@ async function renderUsernameSection(container) {
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') save();
   });
+}
+
+// ── Settings ──────────────────────────────────────────────────────
+
+async function renderSettingsSections(container) {
+  const stored = await chrome.storage.local.get([
+    'moxmox_show_life_shared',
+    'moxmox_show_life_traditional',
+  ]);
+
+  container.appendChild(
+    createSettingsSection('Shared Deck Settings', [
+      {
+        key: 'moxmox_show_life_shared',
+        label: 'Show Life Totals',
+        checked: stored.moxmox_show_life_shared !== false,
+      },
+    ]),
+  );
+
+  container.appendChild(
+    createSettingsSection('Traditional Game Settings', [
+      {
+        key: 'moxmox_show_life_traditional',
+        label: 'Show Life Totals',
+        checked: stored.moxmox_show_life_traditional !== false,
+      },
+    ]),
+  );
+}
+
+function createSettingsSection(title, items) {
+  const section = document.createElement('div');
+  section.className = 'settings-section';
+
+  const heading = document.createElement('div');
+  heading.className = 'settings-heading';
+  heading.textContent = title;
+  section.appendChild(heading);
+
+  for (const item of items) {
+    const label = document.createElement('label');
+    label.className = 'settings-item';
+
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.checked = item.checked;
+    checkbox.addEventListener('change', () => {
+      chrome.storage.local.set({ [item.key]: checkbox.checked });
+    });
+
+    label.appendChild(checkbox);
+    label.append(` ${item.label}`);
+    section.appendChild(label);
+  }
+
+  return section;
 }

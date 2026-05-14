@@ -42,6 +42,8 @@ let localLifeEl = null;
 let localHandCountEl = null;
 let remoteLifeEl = null;
 let localHandCount = null;
+let showLifeDisplay = true;
+let cardViewerZoom = 1.0;
 let menuEl = null;
 let popupBackdrop = null;
 let role = null;         // 'host' or 'guest'
@@ -499,6 +501,7 @@ function setRemotePlayersDisplay(players) {
     remotePlayerRow.appendChild(row);
   }
   syncGiftStateToMain();
+  applyLifeDisplayVisibility();
 }
 
 async function syncGiftStateToMain() {
@@ -694,13 +697,30 @@ async function showCardOverlay({ title, cards, mode }) {
   const titleEl = document.createElement('span');
   titleEl.textContent = title;
 
+  const headerControls = document.createElement('span');
+  headerControls.className = 'moxmox-card-viewer-controls';
+
+  const minusBtn = document.createElement('button');
+  minusBtn.className = 'moxmox-card-zoom-btn';
+  minusBtn.textContent = '−';
+  minusBtn.title = 'Smaller cards';
+
+  const plusBtn = document.createElement('button');
+  plusBtn.className = 'moxmox-card-zoom-btn';
+  plusBtn.textContent = '+';
+  plusBtn.title = 'Larger cards';
+
   const closeBtn = document.createElement('button');
   closeBtn.className = 'moxmox-hand-reveal-close';
   closeBtn.textContent = '✕';
   closeBtn.addEventListener('click', () => overlay.remove());
 
+  headerControls.appendChild(minusBtn);
+  headerControls.appendChild(plusBtn);
+  headerControls.appendChild(closeBtn);
+
   header.appendChild(titleEl);
-  header.appendChild(closeBtn);
+  header.appendChild(headerControls);
   overlay.appendChild(header);
   if (mode === 'zone') {
     makeZoneOverlayDraggable(overlay, header);
@@ -711,6 +731,36 @@ async function showCardOverlay({ title, cards, mode }) {
     ? 'moxmox-zone-viewer-cards'
     : 'moxmox-hand-reveal-cards';
 
+  const applyZoom = () => {
+    const h = Math.round(cardHeight * cardViewerZoom);
+    for (const img of cardList.querySelectorAll('img')) {
+      img.style.height = `${h}px`;
+    }
+    if (mode === 'zone') {
+      for (const el of cardList.querySelectorAll('.moxmox-zone-viewer-card')) {
+        el.style.setProperty('--moxmox-card-height', `${h}px`);
+        el.style.setProperty('--moxmox-card-peek', `${Math.max(24, Math.round(h * 0.2))}px`);
+      }
+      // Expand overlay width so cards don't need a horizontal scrollbar.
+      const cardW = Math.round(h * (488 / 680)); // standard MTG card aspect ratio
+      const needed = cardW + 24 + 24; // card + padding on each side
+      const maxW = window.innerWidth * 0.8;
+      overlay.style.width = `${Math.min(needed, maxW)}px`;
+    }
+  };
+
+  minusBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    cardViewerZoom = Math.max(0.4, cardViewerZoom - 0.2);
+    applyZoom();
+  });
+
+  plusBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    cardViewerZoom = Math.min(3.0, cardViewerZoom + 0.2);
+    applyZoom();
+  });
+
   for (const card of cards) {
     const cardEl = document.createElement('div');
     cardEl.className = mode === 'zone'
@@ -718,18 +768,14 @@ async function showCardOverlay({ title, cards, mode }) {
       : 'moxmox-hand-reveal-card';
 
     const img = createCardImage(card);
-    img.style.height = `${cardHeight}px`;
-    if (mode === 'zone') {
-      cardEl.style.setProperty('--moxmox-card-height', `${cardHeight}px`);
-      cardEl.style.setProperty('--moxmox-card-peek', `${Math.max(24, Math.round(cardHeight * 0.2))}px`);
-    }
-
     cardEl.appendChild(img);
     cardList.appendChild(cardEl);
   }
 
   overlay.appendChild(cardList);
   document.body.appendChild(overlay);
+
+  applyZoom();
 }
 
 function makeZoneOverlayDraggable(overlay, handle) {
@@ -792,6 +838,7 @@ function createCardImage(card) {
 function updateLocalLife(life) {
   if (localLifeEl) {
     setMetricDisplay(localLifeEl, '❤️', life, 'moxmox-life-value');
+    applyLifeDisplayVisibility();
   }
 }
 
@@ -809,6 +856,15 @@ function setMetricDisplay(container, icon, value, valueClass) {
   valueEl.className = valueClass;
   valueEl.textContent = String(value);
   container.append(icon, valueEl);
+}
+
+function applyLifeDisplayVisibility() {
+  const widget = document.querySelector('.moxmox-widget');
+  if (!widget) return;
+  widget.classList.toggle('moxmox-life-hidden', !showLifeDisplay);
+  for (const el of widget.querySelectorAll('.moxmox-life')) {
+    el.style.display = showLifeDisplay ? '' : 'none';
+  }
 }
 
 function updateRemoteLife(life, senderId = null, username = null) {
@@ -883,6 +939,18 @@ function toggleMenu(wrapper) {
     menuEl.appendChild(leaveItem);
   }
 
+  // Hide/Show ❤️ toggle
+  const lifeToggle = document.createElement('button');
+  lifeToggle.className = 'moxmox-menu-item';
+  lifeToggle.textContent = showLifeDisplay ? 'Hide ❤️' : 'Show ❤️';
+  lifeToggle.addEventListener('click', (e) => {
+    e.stopPropagation();
+    showLifeDisplay = !showLifeDisplay;
+    applyLifeDisplayVisibility();
+    lifeToggle.textContent = showLifeDisplay ? 'Hide ❤️' : 'Show ❤️';
+  });
+  menuEl.appendChild(lifeToggle);
+
   wrapper.appendChild(menuEl);
 }
 
@@ -929,6 +997,15 @@ function connectToRoom(roomId, options = {}) {
   if (options.gameType) gameType = options.gameType;
   if (!gameType) gameType = GAME_TYPE_SHARED;
   if (options.maxPlayers) maxPlayers = options.maxPlayers;
+
+  // Apply the per-game-type "Show Life Totals" preference.
+  const storageKey = gameType === GAME_TYPE_TRADITIONAL
+    ? 'moxmox_show_life_traditional'
+    : 'moxmox_show_life_shared';
+  chrome.storage.local.get(storageKey, (result) => {
+    showLifeDisplay = result[storageKey] !== false; // default true
+    applyLifeDisplayVisibility();
+  });
 
   currentRoomId = roomId;
   sessionStorage.setItem(SESSION_KEY, roomId);
