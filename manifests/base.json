@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "MoxMox",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "author": "Nate Finch",
   "homepage_url": "https://github.com/natefinch/moxmox",
   "description": "MoxMox lets you play DanDan style shared deck games right in moxfield's playtest mode. It also augments using moxfield's playtest mode for commander games, letting you see your opponent's hand size, pass control of cards to them, and easily view their graveyard, or show them your hand secretly.",
