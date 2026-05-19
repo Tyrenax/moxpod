@@ -19,6 +19,8 @@ const SESSION_KEY = 'moxmox_room';
 const SESSION_ROLE_KEY = 'moxmox_role';
 const SESSION_PLAYER_KEY = 'moxmox_player_key';
 const SESSION_GAME_TYPE_KEY = 'moxmox_game_type';
+const SESSION_SHARE_BF_KEY = 'moxmox_share_battlefield';
+const SESSION_SHARE_GY_KEY = 'moxmox_share_gy_exile';
 const MSG_TAG = 'moxmox';
 const SHARED_ZONES = new Set(['library', 'graveyard', 'exile']);
 const GAME_TYPE_SHARED = 'shared';
@@ -49,6 +51,8 @@ let popupBackdrop = null;
 let role = null;         // 'host' or 'guest'
 let gameType = null;     // 'shared' or 'traditional'
 let maxPlayers = null;
+let shareBattlefield = true;   // shared deck: mirror cards on opponent's battlefield
+let shareGraveyardExile = true; // shared deck: sync graveyard and exile zones
 let localPlayerId = null;
 let localStatus = 'disconnected';
 let remoteStatus = 'disconnected';
@@ -59,6 +63,7 @@ let gameSetupDone = false; // true once the game-start handshake completes
 let gameModal = null;
 let playerKey = null;      // unique secret for this tab's player slot
 let traditionalLifeInitialized = false;
+let pendingSharedInvite = null; // { shareUrl } — set during shared deck creation
 let heartbeatTimer = null;
 let reconnectTimer = null;
 let intentionalDisconnect = false;
@@ -108,6 +113,8 @@ function resetRoomState(nextGameType) {
   playerKey = null;
   localPlayerId = null;
   maxPlayers = null;
+  shareBattlefield = true;
+  shareGraveyardExile = true;
   localHandCount = null;
   remotePlayers = new Map();
   traditionalLifeInitialized = false;
@@ -116,6 +123,8 @@ function resetRoomState(nextGameType) {
   setRemotePlayersDisplay([]);
   syncGiftStateToMain();
   sessionStorage.removeItem(SESSION_PLAYER_KEY);
+  sessionStorage.removeItem(SESSION_SHARE_BF_KEY);
+  sessionStorage.removeItem(SESSION_SHARE_GY_KEY);
   gameType = nextGameType;
 }
 
@@ -147,6 +156,11 @@ function init() {
     roomToJoin = sessionStorage.getItem(SESSION_KEY) || null;
     initialRole = sessionStorage.getItem(SESSION_ROLE_KEY) || null;
     initialGameType = sessionStorage.getItem(SESSION_GAME_TYPE_KEY) || null;
+    // Restore shared deck settings for reconnection.
+    const savedBF = sessionStorage.getItem(SESSION_SHARE_BF_KEY);
+    if (savedBF !== null) shareBattlefield = savedBF !== 'false';
+    const savedGY = sessionStorage.getItem(SESSION_SHARE_GY_KEY);
+    if (savedGY !== null) shareGraveyardExile = savedGY !== 'false';
   }
 
   chrome.runtime.onMessage.addListener(handlePopupMessage);
@@ -939,15 +953,15 @@ function toggleMenu(wrapper) {
     menuEl.appendChild(leaveItem);
   }
 
-  // Hide/Show ❤️ toggle
+  // Hide/Show Life Totals toggle
   const lifeToggle = document.createElement('button');
   lifeToggle.className = 'moxmox-menu-item';
-  lifeToggle.textContent = showLifeDisplay ? 'Hide ❤️' : 'Show ❤️';
+  lifeToggle.textContent = showLifeDisplay ? 'Hide Life Totals' : 'Show Life Totals';
   lifeToggle.addEventListener('click', (e) => {
     e.stopPropagation();
     showLifeDisplay = !showLifeDisplay;
     applyLifeDisplayVisibility();
-    lifeToggle.textContent = showLifeDisplay ? 'Hide ❤️' : 'Show ❤️';
+    lifeToggle.textContent = showLifeDisplay ? 'Hide Life Totals' : 'Show Life Totals';
   });
   menuEl.appendChild(lifeToggle);
 
@@ -997,6 +1011,8 @@ function connectToRoom(roomId, options = {}) {
   if (options.gameType) gameType = options.gameType;
   if (!gameType) gameType = GAME_TYPE_SHARED;
   if (options.maxPlayers) maxPlayers = options.maxPlayers;
+  if ('shareBattlefield' in options) shareBattlefield = options.shareBattlefield;
+  if ('shareGraveyardExile' in options) shareGraveyardExile = options.shareGraveyardExile;
 
   // Apply the per-game-type "Show Life Totals" preference.
   const storageKey = gameType === GAME_TYPE_TRADITIONAL
@@ -1011,6 +1027,8 @@ function connectToRoom(roomId, options = {}) {
   sessionStorage.setItem(SESSION_KEY, roomId);
   sessionStorage.setItem(SESSION_ROLE_KEY, role);
   sessionStorage.setItem(SESSION_GAME_TYPE_KEY, gameType);
+  sessionStorage.setItem(SESSION_SHARE_BF_KEY, String(shareBattlefield));
+  sessionStorage.setItem(SESSION_SHARE_GY_KEY, String(shareGraveyardExile));
   setLocalStatus('connecting');
   setRemoteStatus('disconnected');
   addLog('out', `Connecting to ${gameType} room ${roomId}…`);
@@ -1034,6 +1052,8 @@ function connectToRoom(roomId, options = {}) {
         username: result.moxmox_username || 'Anonymous',
         gameType,
         maxPlayers,
+        shareBattlefield,
+        shareGraveyardExile,
       });
     });
   });
@@ -1124,8 +1144,39 @@ function handleServerMessage(data) {
         sessionStorage.setItem(SESSION_GAME_TYPE_KEY, gameType);
       }
       if (msg.maxPlayers) maxPlayers = msg.maxPlayers;
+      // Read shared deck settings from the server.
+      if ('shareBattlefield' in msg) {
+        shareBattlefield = msg.shareBattlefield !== false;
+        sessionStorage.setItem(SESSION_SHARE_BF_KEY, String(shareBattlefield));
+      }
+      if ('shareGraveyardExile' in msg) {
+        shareGraveyardExile = msg.shareGraveyardExile !== false;
+        sessionStorage.setItem(SESSION_SHARE_GY_KEY, String(shareGraveyardExile));
+      }
       if (msg.playerId) localPlayerId = msg.playerId;
       if (Array.isArray(msg.players)) updateRemotePlayersFromList(msg.players);
+      // Handle intentional leave — remove the player's name and divider.
+      if (msg.left && msg.leftPlayerId) {
+        remotePlayers.delete(msg.leftPlayerId);
+        setRemotePlayersDisplay([...remotePlayers.values()]);
+        document.querySelector('.moxmox-divider')?.remove();
+      }
+      // Show the pending shared invite URL after join is acknowledged.
+      if (msg.playerId && pendingSharedInvite) {
+        const shareUrl = pendingSharedInvite.shareUrl;
+        pendingSharedInvite = null;
+        // Close the create game popup.
+        if (popupBackdrop) {
+          popupBackdrop.remove();
+          popupBackdrop = null;
+        }
+        showInviteResultPopup({
+          title: 'Game Created',
+          subtitle: 'Send this url to a friend with MoxMox installed to have them join the game.',
+          value: shareUrl,
+          copiedText: 'Link copied to clipboard',
+        });
+      }
       let peerCount = msg.peerCount;
       if (typeof peerCount !== 'number') {
         const m = msg.text?.match(/(\d+)\s+player\(s\)/);
@@ -1560,35 +1611,47 @@ async function handleLocalGameEvent(event) {
   }
 
   if (type === 'card:zone-changed') {
-    const fromShared = SHARED_ZONES.has(fromZone);
-    const toShared = SHARED_ZONES.has(toZone);
+    const fromShared = isSharedZone(fromZone);
+    const toShared = isSharedZone(toZone);
     const fromBF = fromZone === 'battlefield';
     const toBF = toZone === 'battlefield';
 
     if (toBF) {
-      // Send card center as percentage of battlefield dimensions.
-      const size = await sendCmd('get-battlefield-size');
-      const centerX = (card.left ?? 0) + size.cardW / 2;
-      const centerY = (card.top ?? 0) + size.cardH / 2;
-      const pctX = size.usableWidth > 0 ? centerX / size.usableWidth : 0.5;
-      const pctY = size.height > 0 ? centerY / size.height : 0.5;
-      sendWs({
-        type: 'zone-sync', action: 'add-battlefield',
-        cardId: card.id, syncId: card.syncId,
-        pctX, pctY,
-        fromZone: fromShared ? fromZone : undefined,
-      });
-      // Also remove from the shared source zone on the other side.
+      if (shareBattlefield) {
+        // Send card center as percentage of battlefield dimensions.
+        const size = await sendCmd('get-battlefield-size');
+        const centerX = (card.left ?? 0) + size.cardW / 2;
+        const centerY = (card.top ?? 0) + size.cardH / 2;
+        const pctX = size.usableWidth > 0 ? centerX / size.usableWidth : 0.5;
+        const pctY = size.height > 0 ? centerY / size.height : 0.5;
+        sendWs({
+          type: 'zone-sync', action: 'add-battlefield',
+          cardId: card.id, syncId: card.syncId,
+          pctX, pctY,
+          fromZone: fromShared ? fromZone : undefined,
+        });
+      }
+      // Always remove from the shared source zone on the other side,
+      // even if battlefield mirroring is off.
       if (fromShared) {
         sendWs({ type: 'zone-sync', action: 'remove', zone: fromZone, syncId: card.syncId });
       }
     } else if (fromBF && toZone === 'hand') {
-      // Battlefield → hand: just remove from opponent's battlefield.
-      sendWs({ type: 'zone-sync', action: 'remove', zone: 'battlefield', syncId: card.syncId });
+      // Battlefield → hand: remove from opponent's battlefield (if mirrored).
+      if (shareBattlefield) {
+        sendWs({ type: 'zone-sync', action: 'remove', zone: 'battlefield', syncId: card.syncId });
+      }
     } else if (fromBF && toShared) {
       // Battlefield → shared zone: remove from opponent's BF, add to shared zone.
-      sendWs({ type: 'zone-sync', action: 'remove', zone: 'battlefield', syncId: card.syncId });
+      if (shareBattlefield) {
+        sendWs({ type: 'zone-sync', action: 'remove', zone: 'battlefield', syncId: card.syncId });
+      }
       sendWs({ type: 'zone-sync', action: 'add', zone: toZone, cardId: card.id, syncId: card.syncId });
+    } else if (fromBF && !toShared && toZone !== 'hand') {
+      // Battlefield → non-shared zone (GY/exile when not shared): just remove from opponent's BF.
+      if (shareBattlefield) {
+        sendWs({ type: 'zone-sync', action: 'remove', zone: 'battlefield', syncId: card.syncId });
+      }
     } else if (!fromShared && toShared) {
       // Private (hand) → shared: opponent adds to their shared zone.
       sendWs({ type: 'zone-sync', action: 'add', zone: toZone,
@@ -1603,7 +1666,9 @@ async function handleLocalGameEvent(event) {
         syncId: card.syncId });
     }
   } else if (type === 'card:state-changed' && card) {
-    // Battlefield state changes: sync all properties.
+    // Battlefield state changes: only sync if battlefield mirroring is enabled.
+    if (!shareBattlefield) return;
+
     const syncUpdates = {};
     const changes = event.changes || {};
 
@@ -1633,11 +1698,16 @@ async function handleLocalGameEvent(event) {
         syncId: card.syncId, updates: syncUpdates });
     }
   } else if (type === 'card:removed' && event.fromZone) {
-    if (SHARED_ZONES.has(event.fromZone) || event.fromZone === 'battlefield') {
+    if (event.fromZone === 'battlefield') {
+      if (shareBattlefield) {
+        sendWs({ type: 'zone-sync', action: 'remove', zone: 'battlefield',
+          syncId: card.syncId });
+      }
+    } else if (isSharedZone(event.fromZone)) {
       sendWs({ type: 'zone-sync', action: 'remove', zone: event.fromZone,
         syncId: card.syncId });
     }
-  } else if (type === 'zone:reordered' && SHARED_ZONES.has(event.zone)) {
+  } else if (type === 'zone:reordered' && isSharedZone(event.zone)) {
     sendWs({ type: 'zone-sync', action: 'reorder', zone: event.zone,
       syncIds: event.syncIds });
   } else if (type === 'selection-changed') {
@@ -1655,6 +1725,13 @@ function clamp(n, min, max) {
   return Math.min(max, Math.max(min, n));
 }
 
+/** Check if a zone is shared in the current game settings. Library is always shared. */
+function isSharedZone(zone) {
+  if (zone === 'library') return true;
+  if (zone === 'graveyard' || zone === 'exile') return shareGraveyardExile;
+  return false;
+}
+
 // ── Ongoing sync: remote → local ────────────────────────────────────
 
 async function handleRemoteSync(msg) {
@@ -1668,15 +1745,29 @@ async function handleRemoteSync(msg) {
     }
     switch (msg.action) {
       case 'add':
+        if (!isSharedZone(msg.zone)) break;
         await sendCmd('sync-add', { zone: msg.zone, cardId: msg.cardId, syncId: msg.syncId });
         break;
       case 'remove':
+        if (msg.zone === 'battlefield') {
+          if (!shareBattlefield) break;
+        } else if (!isSharedZone(msg.zone)) {
+          break;
+        }
         await sendCmd('sync-remove', { zone: msg.zone, syncId: msg.syncId });
         break;
       case 'move':
+        if (!isSharedZone(msg.fromZone) || !isSharedZone(msg.toZone)) break;
         await sendCmd('sync-move', { fromZone: msg.fromZone, toZone: msg.toZone, syncId: msg.syncId });
         break;
       case 'add-battlefield': {
+        if (!shareBattlefield) {
+          // Still remove from the shared source zone if applicable.
+          if (msg.fromZone && isSharedZone(msg.fromZone)) {
+            await sendCmd('sync-remove', { zone: msg.fromZone, syncId: msg.syncId });
+          }
+          break;
+        }
         // Mirror card center, then convert back to top-left.
         const size = await sendCmd('get-battlefield-size');
         const mirroredCX = (1 - msg.pctX) * size.usableWidth;
@@ -1688,12 +1779,13 @@ async function handleRemoteSync(msg) {
           top: localTop, left: localLeft, rotated: true,
         });
         // If the card came from a shared zone, remove it there too.
-        if (msg.fromZone && SHARED_ZONES.has(msg.fromZone)) {
+        if (msg.fromZone && isSharedZone(msg.fromZone)) {
           await sendCmd('sync-remove', { zone: msg.fromZone, syncId: msg.syncId });
         }
         break;
       }
       case 'update-state': {
+        if (!shareBattlefield) break;
         const updates = { ...msg.updates };
         // Translate each axis independently — don't invent the missing axis.
         if ('pctX' in updates || 'pctY' in updates) {
@@ -1910,7 +2002,7 @@ function showInvitePopup() {
   sections.className = 'moxmox-game-type-sections';
 
   const sharedSection = createInviteSection(
-    'Shared Deck (e.g. DanDan)',
+    'Shared Library (e.g. DanDan)',
     'Share a deck, sync library/graveyard/exile, battlefield cards, and life totals.',
   );
   const traditionalSection = createInviteSection(
@@ -1997,15 +2089,92 @@ function activateInviteSection(active, inactive) {
   inactive.body.innerHTML = '';
 }
 
-function createSharedInvite(container) {
-  resetRoomState(GAME_TYPE_SHARED);
-  role = 'host';
-  const roomId = generateRoomId();
-  connectToRoom(roomId, { gameType: GAME_TYPE_SHARED });
+function createToggleButton(label, initiallyOn, locked) {
+  let on = initiallyOn;
+  const row = document.createElement('div');
+  row.className = 'moxmox-toggle-row';
+  if (on) row.classList.add('on');
+  if (locked) row.classList.add('locked');
 
-  const shareUrl = buildShareUrl(stripRoomParam(window.location.href), roomId);
-  copyToClipboard(shareUrl);
-  renderInviteOutput(container, shareUrl, 'Link copied to clipboard');
+  const track = document.createElement('button');
+  track.type = 'button';
+  track.className = 'moxmox-toggle-track';
+  track.disabled = locked;
+  track.setAttribute('role', 'switch');
+  track.setAttribute('aria-checked', String(on));
+
+  const thumb = document.createElement('span');
+  thumb.className = 'moxmox-toggle-thumb';
+  track.appendChild(thumb);
+
+  const text = document.createElement('span');
+  text.className = 'moxmox-toggle-label';
+  text.textContent = label;
+
+  row.appendChild(track);
+  row.appendChild(text);
+
+  if (!locked) {
+    const toggle = () => {
+      on = !on;
+      row.classList.toggle('on', on);
+      track.setAttribute('aria-checked', String(on));
+    };
+    track.addEventListener('click', toggle);
+    text.addEventListener('click', toggle);
+    text.style.cursor = 'pointer';
+  }
+
+  return { el: row, isOn: () => on };
+}
+
+function createSharedInvite(container) {
+  container.innerHTML = '';
+
+  const settings = document.createElement('div');
+  settings.className = 'moxmox-shared-settings';
+
+  // Read popup defaults for toggles.
+  chrome.storage.local.get(
+    ['moxmox_shared_mirror_battlefield', 'moxmox_shared_sync_gy_exile'],
+    (stored) => {
+      const bfChecked = stored.moxmox_shared_mirror_battlefield !== false;
+      const gyChecked = stored.moxmox_shared_sync_gy_exile !== false;
+
+      const libToggle = createToggleButton('Share Library (always enabled)', true, true);
+      const bfToggle = createToggleButton('Share Mirrored Battlefield', bfChecked, false);
+      const gyToggle = createToggleButton('Share Graveyard and Exile', gyChecked, false);
+
+      settings.appendChild(libToggle.el);
+      settings.appendChild(bfToggle.el);
+      settings.appendChild(gyToggle.el);
+
+      const startBtn = document.createElement('button');
+      startBtn.className = 'moxmox-popup-copy-btn';
+      startBtn.textContent = 'Start';
+
+      startBtn.addEventListener('click', () => {
+        startBtn.disabled = true;
+        resetRoomState(GAME_TYPE_SHARED);
+        role = 'host';
+        const roomId = generateRoomId();
+        const shareUrl = buildShareUrl(stripRoomParam(window.location.href), roomId);
+
+        // Store the pending invite URL — renderInviteOutput is called
+        // after the join is acknowledged by the server.
+        pendingSharedInvite = { shareUrl };
+
+        connectToRoom(roomId, {
+          gameType: GAME_TYPE_SHARED,
+          shareBattlefield: bfToggle.isOn(),
+          shareGraveyardExile: gyToggle.isOn(),
+        });
+      });
+
+      container.appendChild(settings);
+      container.appendChild(startBtn);
+    },
+  );
 }
 
 function renderTraditionalCreate(container) {
@@ -2027,7 +2196,7 @@ function renderTraditionalCreate(container) {
 
   const createBtn = document.createElement('button');
   createBtn.className = 'moxmox-popup-copy-btn';
-  createBtn.textContent = 'Create Room';
+  createBtn.textContent = 'Start';
 
   const error = document.createElement('div');
   error.className = 'moxmox-popup-error';
@@ -2041,8 +2210,17 @@ function renderTraditionalCreate(container) {
       maxPlayers = parseInt(select.value, 10);
       const roomId = await createUniqueTraditionalRoom(maxPlayers);
       connectToRoom(roomId, { gameType: GAME_TYPE_TRADITIONAL, maxPlayers });
-      copyToClipboard(roomId);
-      renderInviteOutput(container, roomId, 'Room code copied to clipboard');
+      // Close the create game popup and show the result popup.
+      if (popupBackdrop) {
+        popupBackdrop.remove();
+        popupBackdrop = null;
+      }
+      showInviteResultPopup({
+        title: 'Game Created',
+        subtitle: 'Send this room code to a friend, and have them click "Join" in the MoxMox menu from a Moxfield playtest page.',
+        value: roomId,
+        copiedText: 'Room code copied to clipboard',
+      });
     } catch (err) {
       error.textContent = err.message;
       createBtn.disabled = false;
@@ -2093,6 +2271,73 @@ function renderInviteOutput(container, value, copiedText) {
   row.appendChild(copyBtn);
   container.appendChild(row);
   showCopiedFeedback(copiedText);
+}
+
+function showInviteResultPopup({ title, subtitle, value, copiedText }) {
+  if (popupBackdrop) {
+    popupBackdrop.remove();
+    popupBackdrop = null;
+  }
+
+  copyToClipboard(value);
+
+  popupBackdrop = document.createElement('div');
+  popupBackdrop.className = 'moxmox-popup-backdrop';
+
+  const popup = document.createElement('div');
+  popup.className = 'moxmox-popup';
+
+  const heading = document.createElement('h3');
+  heading.textContent = title;
+
+  const desc = document.createElement('p');
+  desc.textContent = subtitle;
+
+  const row = document.createElement('div');
+  row.className = 'moxmox-popup-url-row';
+
+  const box = document.createElement('div');
+  box.className = 'moxmox-popup-url';
+  box.textContent = value;
+
+  const copyBtn = document.createElement('button');
+  copyBtn.className = 'moxmox-popup-copy-btn';
+  copyBtn.textContent = 'Copy';
+  copyBtn.addEventListener('click', () => {
+    copyToClipboard(value);
+    copiedMsg.textContent = `✓ ${copiedText}`;
+  });
+
+  row.appendChild(box);
+  row.appendChild(copyBtn);
+
+  const copiedMsg = document.createElement('div');
+  copiedMsg.className = 'moxmox-popup-copied';
+  copiedMsg.textContent = `✓ ${copiedText}`;
+
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'moxmox-popup-close-btn';
+  closeBtn.textContent = 'Close';
+  closeBtn.addEventListener('click', () => {
+    popupBackdrop.remove();
+    popupBackdrop = null;
+  });
+
+  popup.appendChild(heading);
+  popup.appendChild(desc);
+  popup.appendChild(row);
+  popup.appendChild(copiedMsg);
+  popup.appendChild(closeBtn);
+  popupBackdrop.appendChild(popup);
+
+  popupBackdrop.addEventListener('click', (e) => {
+    if (e.target === popupBackdrop) {
+      popupBackdrop.remove();
+      popupBackdrop = null;
+    }
+  });
+
+  document.body.appendChild(popupBackdrop);
 }
 
 async function createTraditionalRoom(roomId, players) {
@@ -2306,14 +2551,21 @@ function leaveCurrentGame() {
   stopHeartbeat();
   clearReconnectTimer();
   if (ws) {
+    // Send leave message before closing so the server frees the seat.
+    try { ws.send(JSON.stringify({ type: 'leave' })); } catch (_) {}
     try { ws.close(); } catch (_) {}
     ws = null;
   }
+
+  // Remove the battlefield divider.
+  document.querySelector('.moxmox-divider')?.remove();
 
   currentRoomId = null;
   role = null;
   gameType = null;
   maxPlayers = null;
+  shareBattlefield = true;
+  shareGraveyardExile = true;
   localPlayerId = null;
   localHandCount = null;
   remoteUsername = null;
@@ -2326,6 +2578,8 @@ function leaveCurrentGame() {
   sessionStorage.removeItem(SESSION_ROLE_KEY);
   sessionStorage.removeItem(SESSION_GAME_TYPE_KEY);
   sessionStorage.removeItem(SESSION_PLAYER_KEY);
+  sessionStorage.removeItem(SESSION_SHARE_BF_KEY);
+  sessionStorage.removeItem(SESSION_SHARE_GY_KEY);
 
   setLocalStatus('disconnected');
   setRemoteStatus('disconnected');
