@@ -445,6 +445,76 @@
   align-items: center;
 }
 
+.moxmox-shared-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+/* ── Slider toggle rows ─────────────────────────────────────────── */
+
+.moxmox-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.moxmox-toggle-row.locked {
+  /* Only dim the track, not the label. */
+}
+
+.moxmox-toggle-row.locked .moxmox-toggle-track {
+  opacity: 0.55;
+}
+
+.moxmox-toggle-label {
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 13px;
+  transition: color 0.15s;
+}
+
+.moxmox-toggle-row.on .moxmox-toggle-label {
+  color: #e0e0e0;
+}
+
+.moxmox-toggle-track {
+  position: relative;
+  width: 40px;
+  height: 22px;
+  border: none;
+  border-radius: 11px;
+  background: #444;
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+  transition: background 0.2s;
+}
+
+.moxmox-toggle-track:disabled {
+  cursor: default;
+}
+
+.moxmox-toggle-row.on .moxmox-toggle-track {
+  background: #4caf50;
+}
+
+.moxmox-toggle-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #ccc;
+  transition: left 0.2s, background 0.2s;
+}
+
+.moxmox-toggle-row.on .moxmox-toggle-thumb {
+  left: 20px;
+  background: #fff;
+}
+
 .moxmox-traditional-controls label {
   display: flex;
   align-items: center;

@@ -116,22 +116,28 @@ function renderState(container, state) {
   updatePanel(state);
   container.appendChild(panelEl);
 
-  // ── Message log ───────────────────────────────────────────────────
+  // ── Message log (collapsible) ───────────────────────────────────
   const section = document.createElement('div');
   section.className = 'section';
 
-  const label = document.createElement('span');
-  label.className = 'section-label';
-  label.textContent = 'Message Log';
-  section.appendChild(label);
+  const toggleBtn = document.createElement('button');
+  toggleBtn.className = 'log-toggle';
+  toggleBtn.textContent = '▸ Message Log';
+  section.appendChild(toggleBtn);
 
   logEl = document.createElement('div');
   logEl.id = 'log';
+  logEl.hidden = true;
   appendLogEntries(state.log || [], 0);
   section.appendChild(logEl);
   container.appendChild(section);
 
-  logEl.scrollTop = logEl.scrollHeight;
+  toggleBtn.addEventListener('click', () => {
+    const expanded = !logEl.hidden;
+    logEl.hidden = expanded;
+    toggleBtn.textContent = expanded ? '▸ Message Log' : '▾ Message Log';
+    if (!expanded) logEl.scrollTop = logEl.scrollHeight;
+  });
 }
 
 /** Called on each live update from the content script. */
@@ -165,16 +171,14 @@ function updatePanel(state) {
     createStatusRow('You', localExtras || statusText(state.localStatus), {
       dotClassName: dotClass(state.localStatus),
     }),
-    createStatusRow('Opponent', statusText(state.remoteStatus), {
-      dotClassName: dotClass(state.remoteStatus),
-    }),
     createStatusRow('Role', roleText),
     createStatusRow('Game', gameTypeText),
   ];
 
-  if (state.maxPlayers) {
-    rows.push(createStatusRow('Max Players', state.maxPlayers));
-  }
+  const seatsText = state.roomId
+    ? `${(state.players || []).filter(p => p.connected !== false).length}/${state.maxPlayers || 2}`
+    : '–';
+  rows.push(createStatusRow('Seats', seatsText));
   if (state.roomId) {
     rows.push(createStatusRow('Room', state.roomId, { valueClassName: 'room-id' }));
   }
@@ -314,10 +318,22 @@ async function renderSettingsSections(container) {
   const stored = await chrome.storage.local.get([
     'moxmox_show_life_shared',
     'moxmox_show_life_traditional',
+    'moxmox_shared_mirror_battlefield',
+    'moxmox_shared_sync_gy_exile',
   ]);
 
   container.appendChild(
-    createSettingsSection('Shared Deck Settings', [
+    createSettingsSection('Shared Library Settings', [
+      {
+        key: 'moxmox_shared_mirror_battlefield',
+        label: 'Share Mirrored Battlefield',
+        checked: stored.moxmox_shared_mirror_battlefield !== false,
+      },
+      {
+        key: 'moxmox_shared_sync_gy_exile',
+        label: 'Share Graveyard and Exile',
+        checked: stored.moxmox_shared_sync_gy_exile !== false,
+      },
       {
         key: 'moxmox_show_life_shared',
         label: 'Show Life Totals',
@@ -347,19 +363,38 @@ function createSettingsSection(title, items) {
   section.appendChild(heading);
 
   for (const item of items) {
-    const label = document.createElement('label');
-    label.className = 'settings-item';
+    const row = document.createElement('div');
+    row.className = 'settings-toggle-row';
+    if (item.checked) row.classList.add('on');
 
-    const checkbox = document.createElement('input');
-    checkbox.type = 'checkbox';
-    checkbox.checked = item.checked;
-    checkbox.addEventListener('change', () => {
-      chrome.storage.local.set({ [item.key]: checkbox.checked });
-    });
+    const track = document.createElement('button');
+    track.type = 'button';
+    track.className = 'settings-toggle-track';
+    track.setAttribute('role', 'switch');
+    track.setAttribute('aria-checked', String(item.checked));
 
-    label.appendChild(checkbox);
-    label.append(` ${item.label}`);
-    section.appendChild(label);
+    const thumb = document.createElement('span');
+    thumb.className = 'settings-toggle-thumb';
+    track.appendChild(thumb);
+
+    const text = document.createElement('span');
+    text.className = 'settings-toggle-label';
+    text.textContent = item.label;
+
+    row.appendChild(track);
+    row.appendChild(text);
+
+    const toggle = () => {
+      const on = !row.classList.contains('on');
+      row.classList.toggle('on', on);
+      track.setAttribute('aria-checked', String(on));
+      chrome.storage.local.set({ [item.key]: on });
+    };
+    track.addEventListener('click', toggle);
+    text.addEventListener('click', toggle);
+    text.style.cursor = 'pointer';
+
+    section.appendChild(row);
   }
 
   return section;

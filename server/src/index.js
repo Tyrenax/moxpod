@@ -36,7 +36,7 @@ export default {
 
 // Valid message types that will be relayed.
 const VALID_TYPES = new Set([
-  'drawCard', 'discard', 'join', 'ping',
+  'drawCard', 'discard', 'join', 'ping', 'leave',
   'game-init', 'game-ready', 'game-start',
   'zone-sync', 'life-sync', 'hand-count-sync',
 ]);
@@ -249,6 +249,8 @@ export class Room {
       exists: true,
       gameType: metadata?.gameType || GAME_TYPE_SHARED,
       maxPlayers: metadata?.maxPlayers || 2,
+      shareBattlefield: metadata?.shareBattlefield !== false,
+      shareGraveyardExile: metadata?.shareGraveyardExile !== false,
       playerCount: players.filter(p => p.connected).length,
       seatCount: players.length,
       full: players.length >= (metadata?.maxPlayers || 2),
@@ -277,6 +279,11 @@ export class Room {
 
     if (parsed.type === 'ping') {
       try { ws.send(JSON.stringify({ type: 'pong', t: parsed.t || Date.now() })); } catch (_) {}
+      return;
+    }
+
+    if (parsed.type === 'leave') {
+      await this.handleLeave(ws);
       return;
     }
 
@@ -318,8 +325,17 @@ export class Room {
       metadata = {
         gameType: GAME_TYPE_SHARED,
         maxPlayers: 2,
+        shareBattlefield: parsed.shareBattlefield !== false,
+        shareGraveyardExile: parsed.shareGraveyardExile !== false,
         createdAt: Date.now(),
       };
+      await this.saveMetadata(metadata);
+    }
+
+    // Populate shared deck settings from the host if missing (backward compat).
+    if (metadata.gameType === GAME_TYPE_SHARED && !('shareBattlefield' in metadata)) {
+      metadata.shareBattlefield = parsed.shareBattlefield !== false;
+      metadata.shareGraveyardExile = parsed.shareGraveyardExile !== false;
       await this.saveMetadata(metadata);
     }
 
@@ -373,6 +389,8 @@ export class Room {
       seatCount: info.seatCount,
       maxPlayers: info.maxPlayers,
       gameType: info.gameType,
+      shareBattlefield: info.shareBattlefield,
+      shareGraveyardExile: info.shareGraveyardExile,
       playerId: record.playerId,
       players: info.players,
     }));
@@ -399,6 +417,8 @@ export class Room {
       seatCount: info.seatCount,
       maxPlayers: info.maxPlayers,
       gameType: info.gameType,
+      shareBattlefield: info.shareBattlefield,
+      shareGraveyardExile: info.shareGraveyardExile,
       players: info.players,
     };
     this.broadcastExcept(ws, systemMsg);
@@ -421,6 +441,46 @@ export class Room {
       }));
     } catch (_) {}
     ws.close(code, reason);
+  }
+
+  async handleLeave(ws) {
+    const att = (() => {
+      try { return ws.deserializeAttachment(); } catch { return null; }
+    })();
+    if (!att?.authenticated) {
+      ws.close(1000, 'Not authenticated');
+      return;
+    }
+
+    // Remove the player record to free the seat.
+    const records = await this.loadPlayerRecords();
+    const index = records.findIndex(p => p.playerKey === att.playerKey);
+    if (index >= 0) {
+      records.splice(index, 1);
+      this.playerRecords = records;
+      await this.savePlayerRecords();
+    }
+
+    // Mark as intentionally left so webSocketClose skips its broadcast.
+    ws.serializeAttachment({ ...att, left: true });
+
+    const metadata = await this.loadMetadata();
+    const info = metadata ? await this.buildRoomInfo(metadata, ws) : null;
+
+    const leaveMsg = {
+      type: 'system',
+      text: `Player left the game. ${info?.playerCount || 0} player(s) in room.`,
+      peerCount: info?.playerCount || 0,
+      seatCount: info?.seatCount || 0,
+      maxPlayers: info?.maxPlayers,
+      gameType: info?.gameType,
+      leftPlayerId: att.playerId,
+      left: true,
+      players: info?.players,
+    };
+    this.broadcastExcept(ws, leaveMsg);
+
+    ws.close(1000, 'Left game');
   }
 
   broadcastExcept(sender, msg) {
@@ -446,13 +506,19 @@ export class Room {
       try { return ws.deserializeAttachment(); } catch { return null; }
     })();
 
+    // Skip broadcast if the player already sent a leave message.
+    if (att?.left) {
+      ws.close(code, reason);
+      return;
+    }
+
     const metadata = await this.loadMetadata();
     const info = metadata ? await this.buildRoomInfo(metadata, ws) : null;
     const remaining = this.getAuthenticatedSockets().filter(s => s !== ws);
 
     const leaveMsg = JSON.stringify({
       type: 'system',
-      text: `Player left. ${Math.max(0, remaining.length)} player(s) in room.`,
+      text: `Player disconnected. ${Math.max(0, remaining.length)} player(s) in room.`,
       peerCount: Math.max(0, remaining.length),
       seatCount: info?.seatCount,
       maxPlayers: info?.maxPlayers,
