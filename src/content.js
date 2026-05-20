@@ -1671,7 +1671,8 @@ async function handleLocalGameEvent(event) {
         const pctY = size.height > 0 ? centerY / size.height : 0.5;
         sendWs({
           type: 'zone-sync', action: 'add-battlefield',
-          cardId: card.id, syncId: card.syncId,
+          cardId: card.id, scryfallId: card.scryfall_id,
+          syncId: card.syncId,
           pctX, pctY,
           fromZone: fromShared ? fromZone : undefined,
         });
@@ -1691,7 +1692,8 @@ async function handleLocalGameEvent(event) {
       if (shareBattlefield) {
         sendWs({ type: 'zone-sync', action: 'remove', zone: 'battlefield', syncId: card.syncId });
       }
-      sendWs({ type: 'zone-sync', action: 'add', zone: toZone, cardId: card.id, syncId: card.syncId });
+      sendWs({ type: 'zone-sync', action: 'add', zone: toZone,
+        cardId: card.id, scryfallId: card.scryfall_id, syncId: card.syncId });
     } else if (fromBF && !toShared && toZone !== 'hand') {
       // Battlefield → non-shared zone (GY/exile when not shared): just remove from opponent's BF.
       if (shareBattlefield) {
@@ -1700,7 +1702,7 @@ async function handleLocalGameEvent(event) {
     } else if (!fromShared && toShared) {
       // Private (hand) → shared: opponent adds to their shared zone.
       sendWs({ type: 'zone-sync', action: 'add', zone: toZone,
-        cardId: card.id, syncId: card.syncId });
+        cardId: card.id, scryfallId: card.scryfall_id, syncId: card.syncId });
     } else if (fromShared && !toShared) {
       // Shared → private (hand): opponent removes from shared zone.
       sendWs({ type: 'zone-sync', action: 'remove', zone: fromZone,
@@ -1791,7 +1793,8 @@ async function handleRemoteSync(msg) {
     switch (msg.action) {
       case 'add':
         if (!isSharedZone(msg.zone)) break;
-        await sendCmd('sync-add', { zone: msg.zone, cardId: msg.cardId, syncId: msg.syncId });
+        await sendCmd('sync-add', { zone: msg.zone, cardId: msg.cardId,
+          scryfallId: msg.scryfallId, syncId: msg.syncId });
         break;
       case 'remove':
         if (msg.zone === 'battlefield') {
@@ -1820,7 +1823,8 @@ async function handleRemoteSync(msg) {
         const localLeft = clamp(Math.round(mirroredCX - size.cardW / 2), 0, size.usableWidth - size.cardW);
         const localTop = clamp(Math.round(mirroredCY - size.cardH / 2), 0, size.height - size.cardH);
         await sendCmd('sync-add-battlefield', {
-          cardId: msg.cardId, syncId: msg.syncId,
+          cardId: msg.cardId, scryfallId: msg.scryfallId,
+          syncId: msg.syncId,
           top: localTop, left: localLeft, rotated: true,
         });
         // If the card came from a shared zone, remove it there too.

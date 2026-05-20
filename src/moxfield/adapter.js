@@ -222,7 +222,8 @@ export class MoxfieldAdapter {
       case 'set-library-from-sync': return await this._setLibraryFromSync(params.cards);
       case 'remove-top-from-library': return await this._removeTopFromLibrary(params.count || 1);
       case 'sync-remove': return await this._syncRemoveFromZone(params.zone, params.syncId);
-      case 'sync-add': return await this._syncAddToZone(params.zone, params.cardId, params.syncId);
+      case 'sync-add': return await this._syncAddToZone(params.zone, params.cardId,
+        params.scryfallId, params.syncId);
       case 'sync-add-battlefield': return await this._syncAddToBattlefield(params);
       case 'sync-move': return await this._syncMoveBetweenZones(params.fromZone, params.toZone, params.syncId);
       case 'sync-update-state': return await this._syncUpdateCardState(params.syncId, params.updates);
@@ -421,12 +422,16 @@ export class MoxfieldAdapter {
     return { ok: true };
   }
 
-  async _syncAddToZone(zone, cardId, syncId) {
+  async _syncAddToZone(zone, cardId, scryfallId, syncId) {
     const usedZoneIds = [];
     for (const cards of Object.values(this._getInstance().state.zones)) {
       for (const c of cards) usedZoneIds.push(c.zoneId);
     }
-    const template = this._getInstance().getCardFromId(cardId, usedZoneIds);
+    // Try Moxfield's cardId first, fall back to scryfallId match.
+    let template = this._getInstance().getCardFromId(cardId, usedZoneIds);
+    if (!template && scryfallId) {
+      template = this._findCardByScryfallId(scryfallId, usedZoneIds);
+    }
     if (!template) return { error: `Card ${cardId} not found in deck data` };
     const card = {
       ...template, zone, syncId,
@@ -439,12 +444,15 @@ export class MoxfieldAdapter {
     return { ok: true };
   }
 
-  async _syncAddToBattlefield({ cardId, syncId, top, left, rotated }) {
+  async _syncAddToBattlefield({ cardId, scryfallId, syncId, top, left, rotated }) {
     const usedZoneIds = [];
     for (const cards of Object.values(this._getInstance().state.zones)) {
       for (const c of cards) usedZoneIds.push(c.zoneId);
     }
-    const template = this._getInstance().getCardFromId(cardId, usedZoneIds);
+    let template = this._getInstance().getCardFromId(cardId, usedZoneIds);
+    if (!template && scryfallId) {
+      template = this._findCardByScryfallId(scryfallId, usedZoneIds);
+    }
     if (!template) return { error: `Card ${cardId} not found in deck data` };
     const card = {
       ...template, zone: 'battlefield', syncId,
@@ -497,24 +505,59 @@ export class MoxfieldAdapter {
   // ── Private: Gift operations ────────────────────────────────────────
 
   _serializeGiftCard(card) {
-    const clone = JSON.parse(JSON.stringify(card));
-    delete clone.zoneId;
-    delete clone.top;
-    delete clone.left;
-    delete clone.zone;
-    return clone;
+    // Neutral format: minimal Scryfall-standard fields + playtest state.
+    // The receiver's adapter fetches additional data from Scryfall if needed.
+    return {
+      scryfallId: card.scryfall_id || '',
+      name: card.name || '',
+      set: card.set || '',
+      cn: card.cn || '',
+      // Playtest state at time of gifting.
+      tapped: card.tapped || false,
+      flipped: card.flipped || false,
+      rotated: card.rotated || false,
+      doesntUntap: card.doesntUntap || false,
+      counters: typeof card.counters === 'number'
+        ? (card.counters > 0 ? { '+1/+1': card.counters } : {})
+        : (card.counters || {}),
+      adjustedPower: card.adjustedPower || 0,
+      adjustedToughness: card.adjustedToughness || 0,
+      adjustedLoyalty: card.adjustedLoyalty || 0,
+    };
   }
 
   _materializeGiftedCard(gift, zone, { preserveGift = true } = {}) {
     if (!gift?.card || !gift.ownerId || !gift.giftId) {
       throw new Error('Invalid gifted card payload');
     }
-    const card = {
-      ...JSON.parse(JSON.stringify(gift.card)),
-      zone,
-      syncId: gift.giftId,
-      zoneId: this._generateZoneId(),
-    };
+
+    // Try to find the card in local deck data by scryfallId.
+    const scryfallId = gift.card.scryfallId || gift.card.scryfall_id;
+    let template = null;
+    if (scryfallId) {
+      template = this._findCardByScryfallId(scryfallId, []);
+    }
+
+    let card;
+    if (template) {
+      // Card exists in our deck — use the full local card data.
+      card = {
+        ...template,
+        zone,
+        syncId: gift.giftId,
+        zoneId: this._generateZoneId(),
+      };
+    } else {
+      // Card not in our deck — create from the gift data (cross-site case).
+      card = {
+        ...JSON.parse(JSON.stringify(gift.card)),
+        zone,
+        syncId: gift.giftId,
+        zoneId: this._generateZoneId(),
+        scryfall_id: scryfallId,
+      };
+    }
+
     delete card.moxmoxGift;
     if (preserveGift) {
       card.moxmoxGift = {
@@ -655,5 +698,18 @@ export class MoxfieldAdapter {
 
   _generateZoneId() {
     return Date.now().toString(36) + Math.random().toString(36).substring(2, 7);
+  }
+
+  _findCardByScryfallId(scryfallId, usedZoneIds) {
+    const usedSet = new Set(usedZoneIds);
+    const zones = this._getInstance().state.zones;
+    for (const cards of Object.values(zones)) {
+      for (const c of cards) {
+        if (c.scryfall_id === scryfallId && !usedSet.has(c.zoneId)) {
+          return { ...c };
+        }
+      }
+    }
+    return null;
   }
 }

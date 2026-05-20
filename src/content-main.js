@@ -5,6 +5,7 @@
 // game state logic lives in the adapters (src/moxfield/adapter.js, etc.).
 
 import { MoxfieldAdapter } from './moxfield/adapter.js';
+import { ArchidektAdapter } from './archidekt/adapter.js';
 
 const MSG_TAG = 'moxmox';
 const URL_CHECK_MS = 500;
@@ -37,7 +38,7 @@ resetControllerReady();
 function createAdapterForSite() {
   const site = detectSite();
   if (site === 'moxfield') return new MoxfieldAdapter();
-  // if (site === 'archidekt') return new ArchidektAdapter();
+  if (site === 'archidekt') return new ArchidektAdapter();
   return null;
 }
 
