@@ -10,7 +10,7 @@ import {
   buildShareUrl,
   extractRoomId,
   stripRoomParam,
-  isGoldfishPage,
+  isPlaytestPage,
 } from './shared/room.js';
 
 const WS_URL = 'wss://moxmox-relay.nate-finch.workers.dev';
@@ -207,8 +207,8 @@ function handlePlaytestRouteChange() {
   const nextUrl = window.location.href;
   if (nextUrl === lastSeenUrl) return;
 
-  const wasPlaytest = isGoldfishPage(lastSeenUrl);
-  const isPlaytest = isGoldfishPage(nextUrl);
+  const wasPlaytest = isPlaytestPage(lastSeenUrl);
+  const isPlaytest = isPlaytestPage(nextUrl);
   lastSeenUrl = nextUrl;
 
   if (wasPlaytest && !isPlaytest) {
@@ -221,7 +221,7 @@ function handlePlaytestRouteChange() {
 }
 
 function ensurePlaytestInitialized() {
-  if (!isGoldfishPage(window.location.href)) return;
+  if (!isPlaytestPage(window.location.href)) return;
   init();
 }
 

@@ -12,7 +12,8 @@
   "host_permissions": [
     "http://localhost:8787/*",
     "https://api.github.com/*",
-    "https://*.workers.dev/*"
+    "https://*.workers.dev/*",
+    "https://archidekt.com/*"
   ],
   "icons": {
     "16": "icons/moxmox-16.png",
@@ -24,7 +25,8 @@
   "content_scripts": [
     {
       "matches": [
-        "https://moxfield.com/*"
+        "https://moxfield.com/*",
+        "https://archidekt.com/*"
       ],
       "js": [
         "content.js"
@@ -36,7 +38,8 @@
     },
     {
       "matches": [
-        "https://moxfield.com/*"
+        "https://moxfield.com/*",
+        "https://archidekt.com/*"
       ],
       "js": [
         "content-main.js"

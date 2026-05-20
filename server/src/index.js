@@ -20,7 +20,7 @@ const ROOM_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
 
 // Allowed relay fields per message type (prevents arbitrary field injection).
 const RELAY_FIELDS = {
-  'zone-sync': new Set(['action', 'zone', 'cardId', 'syncId', 'pctX', 'pctY',
+  'zone-sync': new Set(['action', 'zone', 'cardId', 'scryfallId', 'syncId', 'pctX', 'pctY',
     'fromZone', 'toZone', 'updates', 'syncIds', 'cards', 'targetId', 'gift']),
   'life-sync': new Set(['life']),
   'hand-count-sync': new Set(['handCount']),

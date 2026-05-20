@@ -91,4 +91,36 @@ export function isGoldfishPage(urlString) {
   }
 }
 
+/**
+ * Check if the current page is any supported playtest page.
+ * Returns the site name ('moxfield' | 'archidekt') or null.
+ */
+export function detectPlaytestSite(urlString) {
+  try {
+    const url = new URL(urlString);
+    if (
+      url.hostname === 'moxfield.com' &&
+      /^\/decks\/[^/]+\/goldfish$/.test(url.pathname)
+    ) {
+      return 'moxfield';
+    }
+    if (
+      url.hostname === 'archidekt.com' &&
+      /^\/playtester-v2\/\d+/.test(url.pathname)
+    ) {
+      return 'archidekt';
+    }
+  } catch {
+    // invalid URL
+  }
+  return null;
+}
+
+/**
+ * Check if the current page is any supported playtest page (boolean).
+ */
+export function isPlaytestPage(urlString) {
+  return detectPlaytestSite(urlString) !== null;
+}
+
 export { ROOM_PARAM, ROOM_ID_LENGTH, TRADITIONAL_ROOM_CODE_LENGTH };
