@@ -47,6 +47,7 @@ let localHandCount = null;
 let showLifeDisplay = true;
 let cardViewerZoom = 1.0;
 let menuEl = null;
+let localMenuEl = null;
 let popupBackdrop = null;
 let role = null;         // 'host' or 'guest'
 let gameType = null;     // 'shared' or 'traditional'
@@ -69,6 +70,16 @@ let reconnectTimer = null;
 let intentionalDisconnect = false;
 let initialized = false;
 let lastSeenUrl = window.location.href;
+let localHandRevealEnabled = false;
+let localHandRevealPending = false;
+let localHandRevealTimer = null;
+let liveHandViewerPlayerId = null;
+let handViewerOrientation = 'horizontal';
+let handViewerHorizontalBounds = null;
+let handViewerVerticalBounds = null;
+let cardOverlayRenderId = 0;
+const remoteRevealedHands = new Map();
+const HAND_REVEAL_UPDATE_DELAY = 200;
 const messageLog = [];
 
 /** Generate a unique playerKey for this tab. */
@@ -121,6 +132,7 @@ function resetRoomState(nextGameType) {
   traditionalLifeInitialized = false;
   gameStarted = false;
   gameSetupDone = false;
+  clearHandRevealState();
   setRemotePlayersDisplay([]);
   syncGiftStateToMain();
   sessionStorage.removeItem(SESSION_PLAYER_KEY);
@@ -418,10 +430,9 @@ function removeWidget() {
     menuEl.remove();
     menuEl = null;
   }
-  if (remoteMenuEl) {
-    remoteMenuEl.remove();
-    remoteMenuEl = null;
-  }
+  closeRemoteMenu();
+  closeLocalMenu();
+  closeLiveHandOverlay();
 }
 
 function refreshLocalUsername() {
@@ -430,7 +441,19 @@ function refreshLocalUsername() {
     const name = result.moxmox_username?.trim();
     localNameEl.replaceChildren();
     if (name) {
-      localNameEl.textContent = name;
+      if (currentRoomId) {
+        const nameBtn = document.createElement('button');
+        nameBtn.className = 'moxmox-local-name-btn';
+        nameBtn.textContent = name;
+        nameBtn.title = 'View player options';
+        nameBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          toggleLocalMenu(localNameEl);
+        });
+        localNameEl.appendChild(nameBtn);
+      } else {
+        localNameEl.textContent = name;
+      }
     } else {
       const setBtn = document.createElement('button');
       setBtn.className = 'moxmox-set-username-btn';
@@ -539,24 +562,104 @@ async function syncGiftStateToMain() {
 
 let remoteMenuEl = null;
 
-function toggleRemoteMenu(anchor, targetId = null) {
+function closeRemoteMenu() {
   if (remoteMenuEl) {
     remoteMenuEl.remove();
     remoteMenuEl = null;
+  }
+}
+
+function closeLocalMenu() {
+  if (localMenuEl) {
+    localMenuEl.remove();
+    localMenuEl = null;
+  }
+}
+
+function syncLocalHandRevealToggle() {
+  const toggle = localMenuEl?.querySelector('.moxmox-hand-reveal-toggle');
+  if (!toggle) return;
+  toggle.classList.toggle('on', localHandRevealEnabled);
+  toggle.classList.toggle('pending', localHandRevealPending);
+  toggle.setAttribute('aria-checked', String(localHandRevealEnabled));
+  toggle.disabled = localHandRevealPending;
+}
+
+function toggleLocalMenu(anchor) {
+  if (!currentRoomId) return;
+  if (localMenuEl) {
+    closeLocalMenu();
     return;
   }
+  closeRemoteMenu();
+
+  localMenuEl = document.createElement('div');
+  localMenuEl.className = 'moxmox-menu moxmox-local-menu';
+  localMenuEl.style.position = 'fixed';
+
+  const handRevealToggle = document.createElement('button');
+  handRevealToggle.className = 'moxmox-menu-item moxmox-toggle-row moxmox-hand-reveal-toggle';
+  handRevealToggle.type = 'button';
+  handRevealToggle.setAttribute('role', 'switch');
+  handRevealToggle.innerHTML = `
+    <span class="moxmox-toggle-track" aria-hidden="true"><span class="moxmox-toggle-thumb"></span></span>
+    <span class="moxmox-toggle-label">Play with hand revealed</span>
+  `;
+  handRevealToggle.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    await setLocalHandRevealEnabled(!localHandRevealEnabled);
+    closeLocalMenu();
+  });
+  localMenuEl.appendChild(handRevealToggle);
+  syncLocalHandRevealToggle();
+
+  const rect = anchor.getBoundingClientRect();
+  localMenuEl.style.top = `${rect.bottom + 4}px`;
+  localMenuEl.style.left = `${rect.left}px`;
+
+  document.body.appendChild(localMenuEl);
+
+  requestAnimationFrame(() => {
+    const closeHandler = (e) => {
+      if (localMenuEl && !localMenuEl.contains(e.target)) {
+        closeLocalMenu();
+      }
+      document.removeEventListener('click', closeHandler, true);
+    };
+    document.addEventListener('click', closeHandler, true);
+  });
+}
+
+function toggleRemoteMenu(anchor, targetId = null) {
+  if (remoteMenuEl) {
+    closeRemoteMenu();
+    return;
+  }
+  closeLocalMenu();
 
   remoteMenuEl = document.createElement('div');
   remoteMenuEl.className = 'moxmox-menu moxmox-remote-menu';
   remoteMenuEl.style.position = 'fixed';
+
+  const revealedHand = targetId ? remoteRevealedHands.get(targetId) : null;
+  if (revealedHand?.enabled) {
+    const viewHandItem = document.createElement('button');
+    viewHandItem.className = 'moxmox-menu-item';
+    viewHandItem.textContent = 'View Hand';
+    viewHandItem.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      closeRemoteMenu();
+      await showLiveHandView(targetId);
+    });
+    remoteMenuEl.appendChild(viewHandItem);
+  }
 
   const showHandItem = document.createElement('button');
   showHandItem.className = 'moxmox-menu-item';
   showHandItem.textContent = 'Show Hand';
   showHandItem.addEventListener('click', async (e) => {
     e.stopPropagation();
-    remoteMenuEl.remove();
-    remoteMenuEl = null;
+    closeRemoteMenu();
     await revealHandToOpponent(targetId);
   });
 
@@ -568,8 +671,7 @@ function toggleRemoteMenu(anchor, targetId = null) {
     graveyardItem.textContent = 'View Graveyard';
     graveyardItem.addEventListener('click', (e) => {
       e.stopPropagation();
-      remoteMenuEl.remove();
-      remoteMenuEl = null;
+      closeRemoteMenu();
       requestOpponentZone(targetId, 'graveyard');
     });
 
@@ -578,8 +680,7 @@ function toggleRemoteMenu(anchor, targetId = null) {
     exileItem.textContent = 'View Exile';
     exileItem.addEventListener('click', (e) => {
       e.stopPropagation();
-      remoteMenuEl.remove();
-      remoteMenuEl = null;
+      closeRemoteMenu();
       requestOpponentZone(targetId, 'exile');
     });
 
@@ -598,8 +699,7 @@ function toggleRemoteMenu(anchor, targetId = null) {
   requestAnimationFrame(() => {
     const closeHandler = (e) => {
       if (remoteMenuEl && !remoteMenuEl.contains(e.target)) {
-        remoteMenuEl.remove();
-        remoteMenuEl = null;
+        closeRemoteMenu();
       }
       document.removeEventListener('click', closeHandler, true);
     };
@@ -607,24 +707,106 @@ function toggleRemoteMenu(anchor, targetId = null) {
   });
 }
 
+function serializeHandCards(cards = []) {
+  return cards.map(c => ({
+    name: c.name,
+    set: c.set,
+    cn: c.cn,
+    layout: c.layout,
+    card_faces: c.card_faces,
+  }));
+}
+
+async function getCurrentHandRevealCards() {
+  const result = await sendCmd('get-hand-cards');
+  if (result?.error) throw new Error(result.error);
+  return serializeHandCards(result?.cards || []);
+}
+
 /** Send our hand contents to the opponent for viewing. */
 async function revealHandToOpponent(targetId = null) {
-  const result = await sendCmd('get-hand-cards');
-  const cards = result?.cards || [];
+  const cards = await getCurrentHandRevealCards();
   sendWs({
     type: 'zone-sync', action: 'reveal-hand',
     targetId: gameType === GAME_TYPE_TRADITIONAL ? targetId : undefined,
-    cards: cards.map(c => ({
-      name: c.name,
-      set: c.set,
-      cn: c.cn,
-      layout: c.layout,
-      card_faces: c.card_faces,
-    })),
+    cards,
     username: await getLocalUsername(),
   });
   const target = targetId ? ` to ${remotePlayers.get(targetId)?.username || targetId}` : '';
   addLog('out', `SEND: revealed hand${target} (${cards.length} cards)`);
+}
+
+async function setLocalHandRevealEnabled(enabled) {
+  if (!currentRoomId || localHandRevealPending || localHandRevealEnabled === enabled) return;
+  localHandRevealPending = true;
+  syncLocalHandRevealToggle();
+
+  try {
+    if (enabled) {
+      const cards = await getCurrentHandRevealCards();
+      if (!currentRoomId) return;
+      localHandRevealEnabled = true;
+      await sendHandRevealUpdate(cards);
+      addLog('out', `SEND: live hand sharing on (${cards.length} cards)`);
+      return;
+    }
+
+    localHandRevealEnabled = false;
+    clearLocalHandRevealTimer();
+    sendWs({
+      type: 'zone-sync',
+      action: 'hand-reveal-off',
+      username: await getLocalUsername(),
+    });
+    addLog('out', 'SEND: live hand sharing off');
+  } catch (err) {
+    if (enabled) localHandRevealEnabled = false;
+    addLog('out', `ERROR: hand reveal toggle failed: ${err?.message || err}`);
+  } finally {
+    localHandRevealPending = false;
+    syncLocalHandRevealToggle();
+  }
+}
+
+async function sendHandRevealUpdate(cards = null, targetId = null) {
+  if (!localHandRevealEnabled || !currentRoomId) return;
+  const handCards = cards || await getCurrentHandRevealCards();
+  if (!localHandRevealEnabled || !currentRoomId) return;
+  sendWs({
+    type: 'zone-sync',
+    action: 'hand-reveal-on',
+    targetId: gameType === GAME_TYPE_TRADITIONAL ? targetId : undefined,
+    cards: handCards,
+    username: await getLocalUsername(),
+  });
+}
+
+function clearLocalHandRevealTimer() {
+  if (localHandRevealTimer) {
+    clearTimeout(localHandRevealTimer);
+    localHandRevealTimer = null;
+  }
+}
+
+function scheduleHandRevealUpdate() {
+  if (!localHandRevealEnabled || !currentRoomId) return;
+  clearLocalHandRevealTimer();
+  localHandRevealTimer = setTimeout(() => {
+    localHandRevealTimer = null;
+    sendHandRevealUpdate().catch(err => {
+      addLog('out', `ERROR: hand reveal update failed: ${err?.message || err}`);
+    });
+  }, HAND_REVEAL_UPDATE_DELAY);
+}
+
+function clearHandRevealState() {
+  localHandRevealEnabled = false;
+  localHandRevealPending = false;
+  clearLocalHandRevealTimer();
+  remoteRevealedHands.clear();
+  liveHandViewerPlayerId = null;
+  closeLocalMenu();
+  closeLiveHandOverlay();
 }
 
 function requestOpponentZone(targetId, zone) {
@@ -649,6 +831,7 @@ function sendGiftCard(targetId, gift) {
   });
   if (gift.fromZone === 'hand') {
     broadcastCurrentHandCount();
+    scheduleHandRevealUpdate();
   }
   addLog('out', `SEND: gifted ${gift.card?.name || 'card'} to ${player?.username || targetId}`);
 }
@@ -691,20 +874,112 @@ async function showZoneViewer(cards, username, zone) {
   });
 }
 
-async function showCardOverlay({ title, cards, mode }) {
-  // Remove existing reveal overlay.
+async function showLiveHandView(playerId) {
+  const hand = remoteRevealedHands.get(playerId);
+  if (!hand?.enabled) return;
+  liveHandViewerPlayerId = playerId;
+  await showCardOverlay({
+    title: `${hand.username || 'Opponent'}'s Hand (${hand.cards.length})`,
+    cards: hand.cards,
+    mode: 'hand',
+    liveHandPlayerId: playerId,
+  });
+}
+
+function closeLiveHandOverlay(playerId = null) {
+  const overlay = document.getElementById('moxmox-hand-reveal');
+  const overlayPlayerId = overlay?.dataset.liveHandPlayerId || null;
+  if (overlay && overlayPlayerId && (!playerId || overlayPlayerId === playerId)) {
+    cardOverlayRenderId++;
+    saveHandViewerBounds(overlay);
+    overlay.remove();
+  }
+  if (!playerId || liveHandViewerPlayerId === playerId) {
+    liveHandViewerPlayerId = null;
+  }
+}
+
+function setRemoteHandReveal(playerId, username, cards = []) {
+  if (!playerId) return;
+  const existingPlayer = remotePlayers.get(playerId);
+  const displayName = username || existingPlayer?.username || 'Opponent';
+  remoteRevealedHands.set(playerId, {
+    enabled: true,
+    username: displayName,
+    cards: serializeHandCards(cards),
+  });
+  remotePlayers.set(playerId, {
+    ...(existingPlayer || {}),
+    id: playerId,
+    username: displayName,
+    connected: existingPlayer?.connected !== false,
+    handRevealed: true,
+  });
+  setRemotePlayersDisplay([...remotePlayers.values()]);
+  if (liveHandViewerPlayerId === playerId) {
+    showLiveHandView(playerId).catch(err => {
+      addLog('out', `ERROR: live hand view failed: ${err?.message || err}`);
+    });
+  }
+}
+
+function clearRemoteHandReveal(playerId, updateDisplay = true) {
+  if (!playerId) return;
+  remoteRevealedHands.delete(playerId);
+  const existingPlayer = remotePlayers.get(playerId);
+  if (existingPlayer) {
+    delete existingPlayer.handRevealed;
+    remotePlayers.set(playerId, existingPlayer);
+  }
+  closeLiveHandOverlay(playerId);
+  if (updateDisplay) setRemotePlayersDisplay([...remotePlayers.values()]);
+}
+
+async function showCardOverlay({ title, cards, mode, liveHandPlayerId = null }) {
+  const renderId = ++cardOverlayRenderId;
   const existing = document.getElementById('moxmox-hand-reveal');
-  if (existing) existing.remove();
+  const existingLayout = existing?.dataset.handOrientation || null;
+  const existingRect = existingLayout
+    ? existing.getBoundingClientRect()
+    : null;
+  let nextHandOrientation = mode === 'hand'
+    ? existingLayout || handViewerOrientation
+    : null;
+  let nextHandBounds = existingRect;
 
   // Get card dimensions from Moxfield to match sizing.
   const size = await sendCmd('get-battlefield-size');
+  if (renderId !== cardOverlayRenderId) return;
+  if (liveHandPlayerId && liveHandViewerPlayerId !== liveHandPlayerId) return;
   const cardHeight = size.cardH || 180;
+
+  const currentExisting = document.getElementById('moxmox-hand-reveal');
+  if (currentExisting) {
+    if (mode === 'hand') {
+      nextHandOrientation = currentExisting.dataset.handOrientation || nextHandOrientation;
+      nextHandBounds = currentExisting.dataset.handOrientation
+        ? currentExisting.getBoundingClientRect()
+        : nextHandBounds;
+    }
+    saveHandViewerBounds(currentExisting);
+    if (currentExisting.dataset.liveHandPlayerId && !liveHandPlayerId) {
+      liveHandViewerPlayerId = null;
+    }
+    currentExisting.remove();
+  }
 
   const overlay = document.createElement('div');
   overlay.id = 'moxmox-hand-reveal';
-  overlay.className = mode === 'zone'
-    ? 'moxmox-hand-reveal moxmox-zone-viewer'
-    : 'moxmox-hand-reveal';
+  overlay.className = 'moxmox-hand-reveal';
+  if (mode === 'zone') {
+    overlay.classList.add('moxmox-zone-viewer');
+  } else {
+    overlay.dataset.handOrientation = nextHandOrientation;
+  }
+  if (liveHandPlayerId) {
+    overlay.dataset.liveHandPlayerId = liveHandPlayerId;
+    liveHandViewerPlayerId = liveHandPlayerId;
+  }
 
   const header = document.createElement('div');
   header.className = 'moxmox-hand-reveal-header';
@@ -714,6 +989,10 @@ async function showCardOverlay({ title, cards, mode }) {
 
   const headerControls = document.createElement('span');
   headerControls.className = 'moxmox-card-viewer-controls';
+
+  const orientBtn = document.createElement('button');
+  orientBtn.className = 'moxmox-card-zoom-btn';
+  orientBtn.title = 'Show hand vertically';
 
   const minusBtn = document.createElement('button');
   minusBtn.className = 'moxmox-card-zoom-btn';
@@ -728,8 +1007,16 @@ async function showCardOverlay({ title, cards, mode }) {
   const closeBtn = document.createElement('button');
   closeBtn.className = 'moxmox-hand-reveal-close';
   closeBtn.textContent = '✕';
-  closeBtn.addEventListener('click', () => overlay.remove());
+  closeBtn.addEventListener('click', () => {
+    cardOverlayRenderId++;
+    if (overlay.dataset.liveHandPlayerId) liveHandViewerPlayerId = null;
+    saveHandViewerBounds(overlay);
+    overlay.remove();
+  });
 
+  if (mode === 'hand') {
+    headerControls.appendChild(orientBtn);
+  }
   headerControls.appendChild(minusBtn);
   headerControls.appendChild(plusBtn);
   headerControls.appendChild(closeBtn);
@@ -742,16 +1029,33 @@ async function showCardOverlay({ title, cards, mode }) {
   }
 
   const cardList = document.createElement('div');
-  cardList.className = mode === 'zone'
+  cardList.className = mode === 'zone' || overlay.dataset.handOrientation === 'vertical'
     ? 'moxmox-zone-viewer-cards'
     : 'moxmox-hand-reveal-cards';
+
+  const syncHandOrientation = () => {
+    if (mode !== 'hand') return;
+    const vertical = overlay.dataset.handOrientation === 'vertical';
+    overlay.classList.toggle('moxmox-hand-reveal-vertical', vertical);
+    cardList.className = vertical
+      ? 'moxmox-zone-viewer-cards'
+      : 'moxmox-hand-reveal-cards';
+    for (const el of cardList.children) {
+      el.className = vertical
+        ? 'moxmox-zone-viewer-card'
+        : 'moxmox-hand-reveal-card';
+    }
+    header.classList.add('moxmox-zone-viewer-drag-handle');
+    orientBtn.textContent = vertical ? '↓' : '↑';
+    orientBtn.title = vertical ? 'Show hand at bottom' : 'Show hand vertically';
+  };
 
   const applyZoom = () => {
     const h = Math.round(cardHeight * cardViewerZoom);
     for (const img of cardList.querySelectorAll('img')) {
       img.style.height = `${h}px`;
     }
-    if (mode === 'zone') {
+    if (mode === 'zone' || overlay.dataset.handOrientation === 'vertical') {
       for (const el of cardList.querySelectorAll('.moxmox-zone-viewer-card')) {
         el.style.setProperty('--moxmox-card-height', `${h}px`);
         el.style.setProperty('--moxmox-card-peek', `${Math.max(24, Math.round(h * 0.2))}px`);
@@ -760,9 +1064,27 @@ async function showCardOverlay({ title, cards, mode }) {
       const cardW = Math.round(h * (488 / 680)); // standard MTG card aspect ratio
       const needed = cardW + 24 + 24; // card + padding on each side
       const maxW = window.innerWidth * 0.8;
-      overlay.style.width = `${Math.min(needed, maxW)}px`;
+      if (mode === 'zone' || !overlay.style.width || overlay.style.width === 'auto') {
+        overlay.style.width = `${Math.min(needed, maxW)}px`;
+      }
     }
   };
+
+  orientBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const vertical = overlay.dataset.handOrientation !== 'vertical';
+    saveHandViewerBounds(overlay);
+    overlay.dataset.handOrientation = vertical ? 'vertical' : 'horizontal';
+    handViewerOrientation = overlay.dataset.handOrientation;
+    if (vertical) {
+      applyHandViewerVerticalBounds(overlay, handViewerVerticalBounds);
+      makeZoneOverlayDraggable(overlay, header);
+    } else {
+      applyHandViewerHorizontalBounds(overlay, handViewerHorizontalBounds);
+    }
+    syncHandOrientation();
+    applyZoom();
+  });
 
   minusBtn.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -778,7 +1100,7 @@ async function showCardOverlay({ title, cards, mode }) {
 
   for (const card of cards) {
     const cardEl = document.createElement('div');
-    cardEl.className = mode === 'zone'
+    cardEl.className = mode === 'zone' || overlay.dataset.handOrientation === 'vertical'
       ? 'moxmox-zone-viewer-card'
       : 'moxmox-hand-reveal-card';
 
@@ -790,14 +1112,84 @@ async function showCardOverlay({ title, cards, mode }) {
   overlay.appendChild(cardList);
   document.body.appendChild(overlay);
 
+  syncHandOrientation();
   applyZoom();
+  if (mode === 'hand') {
+    makeZoneOverlayDraggable(overlay, header);
+    if (overlay.dataset.handOrientation === 'vertical') {
+      applyHandViewerVerticalBounds(overlay, nextHandBounds || handViewerVerticalBounds);
+    } else {
+      applyHandViewerHorizontalBounds(overlay, nextHandBounds || handViewerHorizontalBounds);
+    }
+  }
+}
+
+function saveHandViewerBounds(overlay) {
+  if (!overlay?.dataset.handOrientation) return;
+  const rect = overlay.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) return;
+  const bounds = {
+    left: rect.left,
+    top: rect.top,
+    width: rect.width,
+    height: rect.height,
+  };
+  if (overlay.dataset.handOrientation === 'vertical') {
+    handViewerOrientation = 'vertical';
+    handViewerVerticalBounds = bounds;
+  } else {
+    handViewerOrientation = 'horizontal';
+    handViewerHorizontalBounds = bounds;
+  }
+}
+
+function applyHandViewerHorizontalBounds(overlay, bounds = null) {
+  const rect = overlay.getBoundingClientRect();
+  const defaultWidth = rect.width || window.innerWidth;
+  const defaultHeight = rect.height || Math.min(240, window.innerHeight * 0.4);
+  const width = Math.round(clamp(bounds?.width || defaultWidth, 320, window.innerWidth));
+  const height = Math.round(clamp(bounds?.height || defaultHeight, 96, window.innerHeight * 0.94));
+  const defaultLeft = rect.left || 0;
+  const defaultTop = rect.height ? rect.top : window.innerHeight - height;
+  const left = Math.round(clamp(bounds?.left ?? defaultLeft, 0, Math.max(0, window.innerWidth - width)));
+  const top = Math.round(clamp(bounds?.top ?? defaultTop, 0, Math.max(0, window.innerHeight - height)));
+
+  overlay.style.left = `${left}px`;
+  overlay.style.top = `${top}px`;
+  overlay.style.right = 'auto';
+  overlay.style.bottom = 'auto';
+  overlay.style.width = `${width}px`;
+  overlay.style.height = `${height}px`;
+}
+
+function applyHandViewerVerticalBounds(overlay, bounds = null) {
+  const defaultWidth = 260;
+  const defaultHeight = Math.min(Math.max(420, window.innerHeight * 0.88), window.innerHeight * 0.94);
+  const width = Math.round(clamp(bounds?.width || defaultWidth, 180, window.innerWidth * 0.8));
+  const height = Math.round(clamp(bounds?.height || defaultHeight, 240, window.innerHeight * 0.94));
+  const defaultLeft = window.innerWidth - width - 16;
+  const defaultTop = window.innerHeight * 0.06;
+  const left = Math.round(clamp(bounds?.left ?? defaultLeft, 0, Math.max(0, window.innerWidth - width)));
+  const top = Math.round(clamp(bounds?.top ?? defaultTop, 0, Math.max(0, window.innerHeight - height)));
+
+  overlay.style.left = `${left}px`;
+  overlay.style.top = `${top}px`;
+  overlay.style.right = 'auto';
+  overlay.style.bottom = 'auto';
+  overlay.style.width = `${width}px`;
+  overlay.style.height = `${height}px`;
 }
 
 function makeZoneOverlayDraggable(overlay, handle) {
   handle.classList.add('moxmox-zone-viewer-drag-handle');
+  if (overlay.dataset.draggable === 'true') return;
+  overlay.dataset.draggable = 'true';
 
   handle.addEventListener('mousedown', (e) => {
     if (e.button !== 0 || e.target.closest('button')) return;
+    if (!overlay.classList.contains('moxmox-zone-viewer') &&
+        !overlay.dataset.handOrientation &&
+        !overlay.classList.contains('moxmox-hand-reveal-vertical')) return;
     e.preventDefault();
 
     const rect = overlay.getBoundingClientRect();
@@ -829,6 +1221,7 @@ function makeZoneOverlayDraggable(overlay, handle) {
     const stop = () => {
       document.removeEventListener('mousemove', move);
       document.removeEventListener('mouseup', stop);
+      saveHandViewerBounds(overlay);
     };
 
     document.addEventListener('mousemove', move);
@@ -1030,6 +1423,7 @@ function connectToRoom(roomId, options = {}) {
   sessionStorage.setItem(SESSION_GAME_TYPE_KEY, gameType);
   sessionStorage.setItem(SESSION_SHARE_BF_KEY, String(shareBattlefield));
   sessionStorage.setItem(SESSION_SHARE_GY_KEY, String(shareGraveyardExile));
+  refreshLocalUsername();
   setLocalStatus('connecting');
   setRemoteStatus('disconnected');
   addLog('out', `Connecting to ${gameType} room ${roomId}…`);
@@ -1056,6 +1450,11 @@ function connectToRoom(roomId, options = {}) {
         shareBattlefield,
         shareGraveyardExile,
       });
+      if (localHandRevealEnabled) {
+        sendHandRevealUpdate().catch(err => {
+          addLog('out', `ERROR: hand reveal update failed: ${err?.message || err}`);
+        });
+      }
     });
   });
 
@@ -1171,10 +1570,12 @@ function handleServerMessage(data) {
         setLocalStatus('disconnected');
         setRemoteStatus('disconnected');
         currentRoomId = null;
+        clearHandRevealState();
         sessionStorage.removeItem(SESSION_KEY);
         sessionStorage.removeItem(SESSION_ROLE_KEY);
         sessionStorage.removeItem(SESSION_GAME_TYPE_KEY);
         sessionStorage.removeItem(SESSION_PLAYER_KEY);
+        refreshLocalUsername();
         showRoomRejectedModal(msg.text || 'Unable to join this room.');
         break;
       }
@@ -1194,6 +1595,10 @@ function handleServerMessage(data) {
       }
       if (msg.playerId) localPlayerId = msg.playerId;
       if (Array.isArray(msg.players)) updateRemotePlayersFromList(msg.players);
+      if (msg.leftPlayerId) {
+        clearRemoteHandReveal(msg.leftPlayerId, false);
+        if (!msg.left) setRemotePlayersDisplay([...remotePlayers.values()]);
+      }
       // Handle intentional leave — remove the player's name and divider.
       if (msg.left && msg.leftPlayerId) {
         remotePlayers.delete(msg.leftPlayerId);
@@ -1232,6 +1637,7 @@ function handleServerMessage(data) {
     }
     case 'join':
       setRemoteStatus('connected');
+      if (msg.senderId) clearRemoteHandReveal(msg.senderId, false);
       if (Array.isArray(msg.players)) updateRemotePlayersFromList(msg.players);
       if (msg.username) {
         setRemotePlayerDisplay(msg.username, msg.senderId || 'opponent');
@@ -1239,6 +1645,11 @@ function handleServerMessage(data) {
       if (gameType === GAME_TYPE_TRADITIONAL || gameStarted) {
         broadcastCurrentLife();
         broadcastCurrentHandCount();
+      }
+      if (localHandRevealEnabled && msg.senderId) {
+        sendHandRevealUpdate(null, msg.senderId).catch(err => {
+          addLog('out', `ERROR: hand reveal update failed: ${err?.message || err}`);
+        });
       }
       addLog('in', `RECV: join (${msg.username || 'Anonymous'})`);
       break;
@@ -1636,15 +2047,18 @@ async function handleLocalGameEvent(event) {
     await sendCmd('gift-remove', { giftId: card.moxmoxGift.giftId });
     if (toZone === 'hand') {
       broadcastCurrentHandCount();
+      scheduleHandRevealUpdate();
     }
     addLog('out', `SEND: returned ${card.name || 'gifted card'} to ${toZone}`);
     return;
   }
   const handChanged =
     (type === 'card:zone-changed' && (fromZone === 'hand' || toZone === 'hand')) ||
+    (type === 'card:added' && toZone === 'hand') ||
     (type === 'card:removed' && event.fromZone === 'hand');
   if (handChanged) {
     broadcastCurrentHandCount(event.handCount);
+    scheduleHandRevealUpdate();
   }
 
   if (gameType === GAME_TYPE_TRADITIONAL) {
@@ -1784,7 +2198,8 @@ function isSharedZone(zone) {
 async function handleRemoteSync(msg) {
   try {
     const traditionalActions = new Set([
-      'reveal-hand', 'request-zone-view', 'zone-view',
+      'reveal-hand', 'hand-reveal-on', 'hand-reveal-off',
+      'request-zone-view', 'zone-view',
       'gift-card', 'gift-return', 'gift-return-battlefield',
     ]);
     if (gameType === GAME_TYPE_TRADITIONAL && !traditionalActions.has(msg.action)) {
@@ -1861,6 +2276,14 @@ async function handleRemoteSync(msg) {
         await showRevealedHand(msg.cards || [], msg.username || 'Opponent');
         addLog('in', `RECV: opponent revealed hand (${msg.cards?.length || 0} cards)`);
         break;
+      case 'hand-reveal-on':
+        setRemoteHandReveal(msg.senderId, msg.username || 'Opponent', msg.cards || []);
+        addLog('in', `RECV: live hand available (${msg.cards?.length || 0} cards)`);
+        break;
+      case 'hand-reveal-off':
+        clearRemoteHandReveal(msg.senderId);
+        addLog('in', 'RECV: live hand closed');
+        break;
       case 'request-zone-view': {
         if (gameType !== GAME_TYPE_TRADITIONAL) break;
         if (!['graveyard', 'exile'].includes(msg.zone) || !msg.senderId) break;
@@ -1892,6 +2315,7 @@ async function handleRemoteSync(msg) {
         await sendCmd('gift-add-zone', { zone: msg.zone, gift: msg.gift });
         if (msg.zone === 'hand') {
           broadcastCurrentHandCount();
+          scheduleHandRevealUpdate();
         }
         addLog('in', `RECV: returned ${msg.gift.card?.name || 'gifted card'} to ${msg.zone}`);
         break;
@@ -2620,6 +3044,7 @@ function leaveCurrentGame() {
   localHandCount = null;
   remoteUsername = null;
   remotePlayers = new Map();
+  clearHandRevealState();
   traditionalLifeInitialized = false;
   gameStarted = false;
   gameSetupDone = false;
@@ -2635,6 +3060,7 @@ function leaveCurrentGame() {
   setRemoteStatus('disconnected');
   updateLocalHandCount(null);
   setRemotePlayersDisplay([]);
+  refreshLocalUsername();
   syncGiftStateToMain();
   addLog('out', 'Left game');
   notifyPopup();

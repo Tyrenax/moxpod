@@ -374,7 +374,19 @@ display data (name, set, collector number):
 ```
 
 The receiver displays the cards as images (loaded from Scryfall) in a
-bottom-anchored overlay panel that can be dismissed with ✕.
+bottom-anchored overlay panel that can be moved, resized, and dismissed with ✕.
+Hand overlays also include an ↑/↓ control that toggles between the bottom
+horizontal layout and the same vertical overlapping-card layout used by zone
+viewers. Reopening a hand overlay restores the last hand-view orientation,
+position, and size.
+
+Players can also click their own name while in a game and enable
+**Play with hand revealed**. This broadcasts `hand-reveal-on` updates with the
+current hand whenever it changes. Other players then see **View Hand** in that
+player's dropdown, opening the same hand overlay as a live view. Turning the
+toggle off sends `hand-reveal-off`, removes the menu item, and closes any open
+live view of that hand. Live hand views keep their current hand window bounds
+while hand updates rebuild the overlay.
 
 Traditional games also add **View Graveyard** and **View Exile** to each
 opponent's menu. These are pull-based: the local client sends a targeted
@@ -412,6 +424,8 @@ in `chrome.storage.local` (persists across sessions) and sent with the
 - Usernames display in the toolbar widget next to status dots
 - Remote usernames appear as clickable dropdowns (▾) for actions
   like **Show Hand**
+- The local username becomes a dropdown while connected and contains the
+  **Play with hand revealed** toggle
 
 ## Toolbar Widget
 
