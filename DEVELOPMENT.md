@@ -9,6 +9,9 @@ node build.js chrome       # build for Chrome only
 node build.js firefox      # build for Firefox only
 node build.js --watch      # watch mode
 node --test tests/*.test.js # run all tests
+npm run test:build         # build both browsers and smoke-test generated artifacts
+npm run test:e2e           # build Chrome and run Playwright extension tests
+npm run test:firefox-lint  # build Firefox and run web-ext lint
 ```
 
 ## Server

@@ -9,9 +9,14 @@
     "build:chrome": "node build.js chrome",
     "build:firefox": "node build.js firefox",
     "watch": "node build.js --watch",
-    "test": "node --test tests/*.test.js"
+    "test": "node --test tests/*.test.js",
+    "test:unit": "node --test tests/*.test.js",
+    "test:build": "node build.js && node --test tests/build/build-smoke.test.js",
+    "test:e2e": "node build.js chrome && playwright test",
+    "test:firefox-lint": "node build.js firefox && web-ext lint --source-dir dist/firefox --self-hosted"
   },
   "devDependencies": {
+    "@playwright/test": "^1.60.0",
     "esbuild": "^0.25.0",
     "web-ext": "^10.1.0"
   }

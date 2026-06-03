@@ -3,4 +3,6 @@ dist/
 *.zip
 .DS_Store
 .playwright-mcp/
+playwright-report/
+test-results/
 web-ext-artifacts/
