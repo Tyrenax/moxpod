@@ -18,6 +18,6 @@ The tests install a catch-all network guard before installing deterministic rout
 
 ## Fixture coverage
 
-`playwright-foundation.spec.js` serves a small Moxfield playtest page with the navbar shape used by `content.js` and a fake React playtest fiber that satisfies `PlaytestController`'s discovery contract. This proves the extension wiring works in a real browser without depending on live Moxfield markup or APIs.
+`playwright-foundation.spec.js` serves small Moxfield and Archidekt playtest pages. The Moxfield fixture includes the navbar shape used by `content.js` and a fake React playtest fiber that satisfies `PlaytestController`'s discovery contract. The Archidekt fixture includes the bottom toolbar and life counter trigger used as the widget insertion anchor. This proves the extension wiring works in a real browser without depending on live site markup or APIs.
 
 These tests intentionally do not cover Firefox extension loading. Firefox manifest compatibility is covered by the build smoke tests and `web-ext lint`.

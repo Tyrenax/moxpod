@@ -10,6 +10,7 @@ import {
   buildShareUrl,
   extractRoomId,
   stripRoomParam,
+  detectPlaytestSite,
   isPlaytestPage,
 } from './shared/room.js';
 
@@ -147,24 +148,20 @@ watchForPlaytestNavigation();
 ensurePlaytestInitialized();
 
 function init() {
+  const invite = consumeRoomInviteFromUrl();
   if (initialized) {
     ensureWidgetInjected();
+    if (invite) joinRoomFromInvite(invite, { reset: true });
     return;
   }
   initialized = true;
 
-  let roomToJoin = extractRoomId(window.location.href);
+  let roomToJoin = invite?.roomId || null;
   let initialRole = null;
   let initialGameType = null;
-  if (roomToJoin) {
-    initialRole = 'guest';
-    initialGameType = isTraditionalRoomCode(roomToJoin)
-      ? GAME_TYPE_TRADITIONAL
-      : GAME_TYPE_SHARED;
-    // Fresh key for the new guest tab.
-    playerKey = null;
-    sessionStorage.removeItem(SESSION_PLAYER_KEY);
-    history.replaceState(null, '', stripRoomParam(window.location.href));
+  if (invite) {
+    initialRole = invite.role;
+    initialGameType = invite.gameType;
   } else {
     roomToJoin = sessionStorage.getItem(SESSION_KEY) || null;
     initialRole = sessionStorage.getItem(SESSION_ROLE_KEY) || null;
@@ -181,29 +178,64 @@ function init() {
   // Listen for postMessage from MAIN world.
   window.addEventListener('message', handleMainMessage);
 
-  waitForNavbar((navbar) => {
-    injectButton(navbar);
+  waitForToolbar((anchor) => {
+    injectButton(anchor);
     if (roomToJoin) {
-      const savedRoomToJoin = roomToJoin;
-      const savedRole = initialRole;
-      const savedGameType = initialGameType || GAME_TYPE_SHARED;
-      // Check username before connecting (guest or reconnect).
-      chrome.storage.local.get('moxmox_username', (result) => {
-        const username = result.moxmox_username?.trim();
-        if (!username) {
-          showUsernamePrompt(() => {
-            refreshLocalUsername();
-            role = savedRole;
-            gameType = savedGameType;
-            connectToRoom(savedRoomToJoin);
-          });
-          return;
-        }
-        role = savedRole;
-        gameType = savedGameType;
-        connectToRoom(savedRoomToJoin);
+      joinRoomAfterUsername({
+        roomId: roomToJoin,
+        nextRole: initialRole,
+        nextGameType: initialGameType || GAME_TYPE_SHARED,
       });
     }
+  });
+}
+
+function consumeRoomInviteFromUrl() {
+  const roomId = extractRoomId(window.location.href);
+  if (!roomId) return null;
+
+  // Fresh key for the new guest tab.
+  playerKey = null;
+  sessionStorage.removeItem(SESSION_PLAYER_KEY);
+  history.replaceState(null, '', stripRoomParam(window.location.href));
+
+  return {
+    roomId,
+    role: 'guest',
+    gameType: isTraditionalRoomCode(roomId)
+      ? GAME_TYPE_TRADITIONAL
+      : GAME_TYPE_SHARED,
+  };
+}
+
+function joinRoomFromInvite(invite, options = {}) {
+  waitForToolbar(() => {
+    joinRoomAfterUsername({
+      roomId: invite.roomId,
+      nextRole: invite.role,
+      nextGameType: invite.gameType,
+      reset: options.reset,
+    });
+  });
+}
+
+function joinRoomAfterUsername({ roomId, nextRole, nextGameType, reset = false }) {
+  if (reset) resetRoomState(nextGameType);
+  // Check username before connecting (guest or reconnect).
+  chrome.storage.local.get('moxmox_username', (result) => {
+    const username = result.moxmox_username?.trim();
+    if (!username) {
+      showUsernamePrompt(() => {
+        refreshLocalUsername();
+        role = nextRole;
+        gameType = nextGameType;
+        connectToRoom(roomId);
+      });
+      return;
+    }
+    role = nextRole;
+    gameType = nextGameType;
+    connectToRoom(roomId);
   });
 }
 
@@ -245,7 +277,7 @@ function handlePlaytestClosed() {
 }
 
 function ensureWidgetInjected() {
-  waitForNavbar((navbar) => injectButton(navbar));
+  waitForToolbar((anchor) => injectButton(anchor));
 }
 
 // ── postMessage bridge (ISOLATED → MAIN) ────────────────────────────
@@ -296,22 +328,41 @@ function handleMainMessage(e) {
   }
 }
 
-// ── Navbar detection ────────────────────────────────────────────────
+// ── Toolbar detection ───────────────────────────────────────────────
 
-function waitForNavbar(callback, retries = 30, delay = 500) {
-  const zoomText = findZoomElement();
-  if (zoomText) {
-    callback(zoomText);
+function waitForToolbar(callback, retries = 30, delay = 500) {
+  const anchor = findToolbarAnchor();
+  if (anchor) {
+    callback(anchor);
     return;
   }
   if (retries > 0) {
-    setTimeout(() => waitForNavbar(callback, retries - 1, delay), delay);
+    setTimeout(() => waitForToolbar(callback, retries - 1, delay), delay);
   } else {
-    console.warn('[MoxMox] Could not find playtest navbar');
+    console.warn('[MoxMox] Could not find playtest toolbar');
   }
 }
 
-function findZoomElement() {
+function findToolbarAnchor() {
+  if (detectPlaytestSite(window.location.href) === 'archidekt') {
+    return findArchidektLifeCounterTrigger();
+  }
+  return findMoxfieldZoomElement();
+}
+
+function findArchidektLifeCounterTrigger() {
+  const selector = 'div[class*="archidektDropdown_trigger"][class*="lifePlayerCounters_fullHeight"]';
+  const toolbar = document.querySelector(
+    '[class*="mobileToolbar_bar"], [class*="toolbar_bar"]',
+  );
+  return toolbar?.querySelector(selector) || document.querySelector(selector);
+}
+
+function isArchidektToolbarAnchor(element) {
+  return element?.matches?.('div[class*="archidektDropdown_trigger"][class*="lifePlayerCounters_fullHeight"]');
+}
+
+function findMoxfieldZoomElement() {
   const listItems = document.querySelectorAll('nav li');
   for (const li of listItems) {
     if (/^\d+%$/.test(li.textContent.trim())) return li;
@@ -326,6 +377,10 @@ function injectButton(zoomElement) {
 
   const widget = document.createElement('div');
   widget.className = 'moxmox-widget';
+  const archidektAnchor = isArchidektToolbarAnchor(zoomElement);
+  if (archidektAnchor) {
+    widget.classList.add('moxmox-archidekt-widget');
+  }
 
   // ── Info column (3 lines) ──
   const info = document.createElement('div');
@@ -400,6 +455,11 @@ function injectButton(zoomElement) {
   document.addEventListener('click', () => {
     if (menuEl) { menuEl.remove(); menuEl = null; }
   });
+
+  if (archidektAnchor) {
+    zoomElement.after(widget);
+    return;
+  }
 
   const li = document.createElement('li');
   li.appendChild(widget);
@@ -561,8 +621,14 @@ async function syncGiftStateToMain() {
 }
 
 let remoteMenuEl = null;
+let localMenuDismissCleanup = null;
+let remoteMenuDismissCleanup = null;
 
 function closeRemoteMenu() {
+  if (remoteMenuDismissCleanup) {
+    remoteMenuDismissCleanup();
+    remoteMenuDismissCleanup = null;
+  }
   if (remoteMenuEl) {
     remoteMenuEl.remove();
     remoteMenuEl = null;
@@ -570,6 +636,10 @@ function closeRemoteMenu() {
 }
 
 function closeLocalMenu() {
+  if (localMenuDismissCleanup) {
+    localMenuDismissCleanup();
+    localMenuDismissCleanup = null;
+  }
   if (localMenuEl) {
     localMenuEl.remove();
     localMenuEl = null;
@@ -608,26 +678,16 @@ function toggleLocalMenu(anchor) {
   handRevealToggle.addEventListener('click', async (e) => {
     e.stopPropagation();
     await setLocalHandRevealEnabled(!localHandRevealEnabled);
-    closeLocalMenu();
   });
   localMenuEl.appendChild(handRevealToggle);
   syncLocalHandRevealToggle();
 
-  const rect = anchor.getBoundingClientRect();
-  localMenuEl.style.top = `${rect.bottom + 4}px`;
-  localMenuEl.style.left = `${rect.left}px`;
-
   document.body.appendChild(localMenuEl);
-
-  requestAnimationFrame(() => {
-    const closeHandler = (e) => {
-      if (localMenuEl && !localMenuEl.contains(e.target)) {
-        closeLocalMenu();
-      }
-      document.removeEventListener('click', closeHandler, true);
-    };
-    document.addEventListener('click', closeHandler, true);
-  });
+  positionFixedMenu(localMenuEl, anchor);
+  localMenuDismissCleanup = installMenuDismissHandlers(
+    () => localMenuEl,
+    closeLocalMenu,
+  );
 }
 
 function toggleRemoteMenu(anchor, targetId = null) {
@@ -688,23 +748,63 @@ function toggleRemoteMenu(anchor, targetId = null) {
     remoteMenuEl.appendChild(exileItem);
   }
 
-  // Position below the anchor element.
-  const rect = anchor.getBoundingClientRect();
-  remoteMenuEl.style.top = `${rect.bottom + 4}px`;
-  remoteMenuEl.style.left = `${rect.left}px`;
-
   document.body.appendChild(remoteMenuEl);
+  positionFixedMenu(remoteMenuEl, anchor);
+  remoteMenuDismissCleanup = installMenuDismissHandlers(
+    () => remoteMenuEl,
+    closeRemoteMenu,
+  );
+}
 
-  // Close on next click anywhere (delayed so the current click doesn't close it).
+function installMenuDismissHandlers(getMenu, closeMenu) {
+  let active = true;
+  let installed = false;
+
+  const clickHandler = (event) => {
+    const menu = getMenu();
+    if (!menu) {
+      cleanup();
+      return;
+    }
+    if (menu.contains(event.target)) return;
+    closeMenu();
+  };
+
+  const keyHandler = (event) => {
+    if (event.key !== 'Escape' || !getMenu()) return;
+    event.stopPropagation();
+    closeMenu();
+  };
+
+  function cleanup() {
+    active = false;
+    if (!installed) return;
+    document.removeEventListener('click', clickHandler, true);
+    document.removeEventListener('keydown', keyHandler, true);
+    installed = false;
+  }
+
   requestAnimationFrame(() => {
-    const closeHandler = (e) => {
-      if (remoteMenuEl && !remoteMenuEl.contains(e.target)) {
-        closeRemoteMenu();
-      }
-      document.removeEventListener('click', closeHandler, true);
-    };
-    document.addEventListener('click', closeHandler, true);
+    if (!active) return;
+    document.addEventListener('click', clickHandler, true);
+    document.addEventListener('keydown', keyHandler, true);
+    installed = true;
   });
+
+  return cleanup;
+}
+
+function positionFixedMenu(menu, anchor) {
+  const rect = anchor.getBoundingClientRect();
+  const gap = 4;
+  menu.style.left = `${rect.left}px`;
+  menu.style.top = shouldOpenMenuUp(anchor)
+    ? `${Math.max(gap, rect.top - menu.offsetHeight - gap)}px`
+    : `${rect.bottom + gap}px`;
+}
+
+function shouldOpenMenuUp(anchor) {
+  return !!anchor?.closest?.('.moxmox-archidekt-widget');
 }
 
 function serializeHandCards(cards = []) {
