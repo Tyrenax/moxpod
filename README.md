@@ -1,7 +1,7 @@
 # MoxMox
 
-A Chrome and Firefox browser extension that enhances multiplayer Magic: The
-Gathering games on [Moxfield's playtest page](https://moxfield.com).
+A Chrome and Firefox browser extension that lets you play DanDan and enhances multiplayer Magic: The
+Gathering games on Moxfield and Archidekt's playtesters.
 
 **[Install from GitHub Releases](https://github.com/natefinch/moxmox/releases)**
 
