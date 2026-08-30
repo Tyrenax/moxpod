@@ -5,8 +5,14 @@
 // content-main.js.
 
 import { PlaytestController } from '../playtest/index.js';
+import { encodeSnapshot } from '../board/serialize.js';
+import { MIRRORED_ZONES, PLAYER_COUNTERS, BROWSABLE_ZONES } from '../board/protocol.js';
 
 const GIFT_RETURN_ZONES = new Set(['hand', 'graveyard', 'exile', 'library']);
+
+// Zones a spectator may be shown card-by-card, plus the hidden ones we only
+// ever expose with the owner's explicit consent (reveal-hand).
+const READABLE_ZONES = new Set(['hand', ...BROWSABLE_ZONES]);
 
 export class MoxfieldAdapter {
   constructor() {
@@ -232,6 +238,8 @@ export class MoxfieldAdapter {
       case 'get-hand-count': return { handCount: this._getHandCount() };
       case 'get-hand-cards': return this._getZoneCards('hand');
       case 'get-zone-cards': return this._getZoneCards(params.zone);
+      case 'get-board-state': return this._getBoardSnapshot();
+      case 'gift-to-player': return await this.giveCardToOpponent(params.targetId, params.zoneId);
       case 'gift-add-battlefield': return await this._addGiftedCardToBattlefield(params.gift, {
         preserveGift: params.preserveGift !== false,
       });
@@ -308,7 +316,7 @@ export class MoxfieldAdapter {
   }
 
   _getZoneCards(zone) {
-    if (!['hand', 'graveyard', 'exile'].includes(zone)) {
+    if (!READABLE_ZONES.has(zone)) {
       return { error: `Unsupported zone: ${zone}` };
     }
     const cards = this._getInstance().state.zones[zone] || [];
@@ -321,6 +329,43 @@ export class MoxfieldAdapter {
         card_faces: c.card_faces,
       })),
     };
+  }
+
+  /**
+   * Read the whole locally-visible board and encode it for the wire.
+   *
+   * This runs in the MAIN world, so we serialise here rather than shipping
+   * raw Moxfield card objects across the postMessage boundary -- a full
+   * Scryfall object is several kilobytes and there can be sixty of them.
+   *
+   * Deliberately excluded: the contents of `hand` and `library`. Spectators
+   * get counts only. Revealing a hand stays an explicit, opt-in action
+   * through the existing reveal-hand flow.
+   */
+  _getBoardSnapshot() {
+    const inst = this._getInstance();
+    const state = inst.state;
+    const zones = {};
+    for (const zone of MIRRORED_ZONES) {
+      zones[zone] = state.zones[zone] || [];
+    }
+
+    const counters = {};
+    for (const name of PLAYER_COUNTERS) {
+      if (state[name]) counters[name] = state[name];
+    }
+
+    return encodeSnapshot({
+      zones,
+      geometry: this._getBattlefieldSize(),
+      life: state.life,
+      turn: state.turn,
+      counters,
+      counts: {
+        hand: state.zones.hand?.length || 0,
+        library: state.zones.library?.length || 0,
+      },
+    });
   }
 
   _getLibrary() {

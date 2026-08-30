@@ -16,7 +16,7 @@ const SYNC_COMMANDS = new Set([
   'set-library-from-sync', 'remove-top-from-library',
   'sync-remove', 'sync-add', 'sync-add-battlefield',
   'sync-move', 'sync-update-state',
-  'gift-add-battlefield', 'gift-add-zone', 'gift-remove',
+  'gift-add-battlefield', 'gift-add-zone', 'gift-remove', 'gift-to-player',
 ]);
 
 let adapter = null;

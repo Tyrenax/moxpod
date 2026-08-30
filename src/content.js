@@ -13,9 +13,28 @@ import {
   detectPlaytestSite,
   isPlaytestPage,
 } from './shared/room.js';
+import { createBoardFeature } from './board/integration.js';
+import { tracer } from './debug/tracer.js';
+import { mountDebugPanel } from './debug/panel.js';
 
-const WS_URL = 'wss://moxmox-relay.nate-finch.workers.dev';
+// The relay this client talks to. Overridable at runtime so you can point a
+// tab at `node server/dev-relay.js` without rebuilding the extension:
+//   localStorage.setItem('moxpod_relay', 'ws://localhost:8787')
+const DEFAULT_WS_URL = 'wss://moxmox-relay.nate-finch.workers.dev';
+
+function readRelayOverride() {
+  try {
+    const value = localStorage.getItem('moxpod_relay');
+    if (value && /^wss?:\/\//.test(value)) return value.replace(/\/$/, '');
+  } catch { /* private mode */ }
+  return null;
+}
+
+const WS_URL = readRelayOverride() || DEFAULT_WS_URL;
 const HTTP_URL = WS_URL.replace(/^wss:/, 'https:').replace(/^ws:/, 'http:');
+if (WS_URL !== DEFAULT_WS_URL) {
+  console.log(`[MoxPod] using relay override: ${WS_URL}`);
+}
 const SESSION_KEY = 'moxmox_room';
 const SESSION_ROLE_KEY = 'moxmox_role';
 const SESSION_PLAYER_KEY = 'moxmox_player_key';
@@ -84,6 +103,65 @@ const HAND_REVEAL_UPDATE_DELAY = 200;
 const messageLog = [];
 
 /** Generate a unique playerKey for this tab. */
+// ── MoxPod board sharing ────────────────────────────────────────────
+
+const boardFeature = createBoardFeature({
+  tracer,
+  sendWs: msg => sendWs(msg),
+  sendCmd: (action, params) => sendCmd(action, params),
+  getPlayers: () => listSpectatablePlayers(),
+  getLocalPlayerId: () => localPlayerId,
+  isTraditional: () => gameType === GAME_TYPE_TRADITIONAL,
+  getUsername: () => getLocalUsername(),
+  confirmClaim: options => showConfirmDialog(options),
+  notify: text => addLog('in', text),
+});
+
+/**
+ * Everyone whose board we can show: the real remote players, plus any
+ * simulated opponents while the debug simulator is running.
+ */
+function listSpectatablePlayers() {
+  const real = [...remotePlayers.values()].filter(p => p.id);
+  const simulated = boardFeature?.simulator?.running ? boardFeature.simulator.players : [];
+  return [...real, ...simulated];
+}
+
+/** Small yes/no modal, reusing MoxMox's popup styling. */
+function showConfirmDialog({ title, text, confirmLabel = 'Accepter', cancelLabel = 'Refuser' }) {
+  return new Promise((resolve) => {
+    const backdrop = document.createElement('div');
+    backdrop.className = 'moxmox-popup-backdrop';
+    const popup = document.createElement('div');
+    popup.className = 'moxmox-popup';
+
+    const heading = document.createElement('h3');
+    heading.textContent = title;
+    const body = document.createElement('p');
+    body.textContent = text;
+
+    const row = document.createElement('div');
+    row.className = 'moxmox-popup-actions';
+    const yes = document.createElement('button');
+    yes.className = 'moxmox-popup-copy-btn';
+    yes.textContent = confirmLabel;
+    const no = document.createElement('button');
+    no.className = 'moxmox-popup-cancel-btn';
+    no.textContent = cancelLabel;
+
+    const close = (answer) => { backdrop.remove(); resolve(answer); };
+    yes.addEventListener('click', () => close(true));
+    no.addEventListener('click', () => close(false));
+    backdrop.addEventListener('click', e => { if (e.target === backdrop) close(false); });
+
+    row.append(no, yes);
+    popup.append(heading, body, row);
+    backdrop.appendChild(popup);
+    document.body.appendChild(backdrop);
+    yes.focus();
+  });
+}
+
 function getOrCreatePlayerKey() {
   if (playerKey) return playerKey;
   // Check sessionStorage — survives refresh of the same tab.
@@ -115,6 +193,7 @@ function ensureUsername(onComplete) {
 }
 
 function resetRoomState(nextGameType) {
+  boardFeature.stop();
   intentionalDisconnect = true;
   stopHeartbeat();
   clearReconnectTimer();
@@ -155,6 +234,7 @@ function init() {
     return;
   }
   initialized = true;
+  mountDebugPanel({ feature: boardFeature, tracer, relayUrl: WS_URL });
 
   let roomToJoin = invite?.roomId || null;
   let initialRole = null;
@@ -552,6 +632,7 @@ function updateRemotePlayersFromList(players = []) {
   }
   remotePlayers = next;
   setRemotePlayersDisplay([...remotePlayers.values()]);
+  boardFeature.onRosterChange();
 }
 
 function setRemotePlayersDisplay(players) {
@@ -1701,6 +1782,7 @@ function handleServerMessage(data) {
       }
       // Handle intentional leave — remove the player's name and divider.
       if (msg.left && msg.leftPlayerId) {
+        boardFeature.onPlayerLeft(msg.leftPlayerId);
         remotePlayers.delete(msg.leftPlayerId);
         setRemotePlayersDisplay([...remotePlayers.values()]);
         document.querySelector('.moxmox-divider')?.remove();
@@ -1857,6 +1939,7 @@ function activateTraditionalGame() {
   gameSetupDone = true;
   broadcastCurrentLife();
   broadcastCurrentHandCount();
+  boardFeature.start();
 }
 
 function broadcastCurrentLife() {
@@ -2128,6 +2211,7 @@ function showUsernamePrompt(onComplete) {
 
 async function handleLocalGameEvent(event) {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  boardFeature.onLocalGameEvent(event);
 
   const { type, card, fromZone, toZone } = event;
   if (
@@ -2297,6 +2381,7 @@ function isSharedZone(zone) {
 
 async function handleRemoteSync(msg) {
   try {
+    if (boardFeature.handleRemoteSync(msg)) return;
     const traditionalActions = new Set([
       'reveal-hand', 'hand-reveal-on', 'hand-reveal-off',
       'request-zone-view', 'zone-view',

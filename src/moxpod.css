@@ -1,0 +1,606 @@
+/* MoxPod — spectator panel and dev console.
+ *
+ * Kept in its own file so it never collides with upstream MoxMox styling and
+ * so the whole feature can be dropped by removing one entry from the manifest.
+ *
+ * Layout model: the panel is fixed to the top of the viewport at a height of
+ * --moxpod-split, and the page body gets an equal padding-top so Moxfield's
+ * own UI keeps the rest. Both values come from one variable, so dragging the
+ * resizer moves them together.
+ */
+
+:root {
+  --moxpod-split: 0vh;
+  --moxpod-bg: #14161c;
+  --moxpod-bg-2: #1c1f28;
+  --moxpod-line: rgba(255, 255, 255, 0.12);
+  --moxpod-text: rgba(255, 255, 255, 0.92);
+  --moxpod-muted: rgba(255, 255, 255, 0.55);
+  --moxpod-accent: #6ea8fe;
+  --moxpod-good: #4ade80;
+  --moxpod-warn: #fbbf24;
+  --moxpod-bad: #f87171;
+  --moxpod-card-h: calc(var(--moxpod-split) * 0.30);
+}
+
+html.moxpod-active body {
+  padding-top: var(--moxpod-split) !important;
+  box-sizing: border-box;
+}
+
+body.moxpod-resizing {
+  user-select: none;
+  cursor: row-resize;
+}
+
+/* ── Panel shell ─────────────────────────────────────────────────── */
+
+.moxpod-panel {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--moxpod-split);
+  z-index: 2147483000;
+  display: flex;
+  flex-direction: column;
+  background: var(--moxpod-bg);
+  color: var(--moxpod-text);
+  border-bottom: 2px solid var(--moxpod-line);
+  font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
+}
+
+.moxpod-panel.moxpod-hidden {
+  display: none;
+}
+
+/* ── Tab bar ─────────────────────────────────────────────────────── */
+
+.moxpod-tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  background: var(--moxpod-bg-2);
+  border-bottom: 1px solid var(--moxpod-line);
+  flex: 0 0 auto;
+}
+
+.moxpod-tablist {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  flex: 1 1 auto;
+  scrollbar-width: thin;
+}
+
+.moxpod-tab {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 11px;
+  border: 1px solid var(--moxpod-line);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--moxpod-muted);
+  cursor: pointer;
+  white-space: nowrap;
+  font-size: 13px;
+  transition: background 0.12s, color 0.12s;
+}
+
+.moxpod-tab:hover { background: rgba(255, 255, 255, 0.09); }
+
+.moxpod-tab.active {
+  background: rgba(110, 168, 254, 0.16);
+  border-color: var(--moxpod-accent);
+  color: #fff;
+}
+
+.moxpod-tab.offline { opacity: 0.45; }
+
+.moxpod-tab.simulated .moxpod-tab-name::after {
+  content: " (sim)";
+  color: var(--moxpod-warn);
+}
+
+.moxpod-tab-key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  font-size: 10px;
+  color: var(--moxpod-muted);
+}
+
+.moxpod-tab-name { font-weight: 600; }
+.moxpod-tab-stat { font-size: 12px; color: var(--moxpod-muted); }
+.moxpod-tab-stat b { color: var(--moxpod-text); }
+
+.moxpod-nav,
+.moxpod-tool {
+  border: 1px solid var(--moxpod-line);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--moxpod-text);
+  border-radius: 6px;
+  cursor: pointer;
+  padding: 4px 9px;
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.moxpod-nav:hover,
+.moxpod-tool:hover { background: rgba(255, 255, 255, 0.13); }
+
+.moxpod-tools { display: flex; gap: 4px; flex: 0 0 auto; }
+
+/* ── Battlefield stage ───────────────────────────────────────────── */
+
+.moxpod-stage {
+  position: relative;
+  flex: 1 1 auto;
+  overflow: hidden;
+  background:
+    radial-gradient(ellipse at 50% 0%, rgba(110, 168, 254, 0.06), transparent 60%),
+    var(--moxpod-bg);
+}
+
+.moxpod-board {
+  position: absolute;
+  inset: 0;
+}
+
+.moxpod-board.flipped { transform: rotate(180deg); }
+.moxpod-board.flipped .moxpod-card-slot { transform: translate(-50%, -50%) rotate(180deg); }
+
+.moxpod-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--moxpod-muted);
+  pointer-events: none;
+}
+
+/* ── Cards ───────────────────────────────────────────────────────── */
+
+.moxpod-card-slot {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  cursor: pointer;
+}
+
+.moxpod-card {
+  position: relative;
+  height: var(--moxpod-card-h);
+  aspect-ratio: 5 / 7;
+  border-radius: 5px;
+  overflow: visible;
+  transition: transform 0.14s ease;
+  filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.55));
+}
+
+.moxpod-card img,
+.moxpod-text-frame {
+  width: 100%;
+  height: 100%;
+  border-radius: 5px;
+  display: block;
+  object-fit: cover;
+}
+
+.moxpod-card.tapped { transform: rotate(90deg); }
+.moxpod-card.rotated { transform: rotate(180deg); }
+.moxpod-card.tapped.rotated { transform: rotate(270deg); }
+.moxpod-card-slot:hover .moxpod-card { transform: scale(1.06); z-index: 50; }
+.moxpod-card-slot:hover .moxpod-card.tapped { transform: rotate(90deg) scale(1.06); }
+
+.moxpod-card.compact { height: calc(var(--moxpod-card-h) * 0.85); }
+
+.moxpod-card-back {
+  width: 100%;
+  height: 100%;
+  border-radius: 5px;
+  background: linear-gradient(145deg, #3b2f4a, #22192c);
+  border: 2px solid rgba(255, 255, 255, 0.16);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.35);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+}
+
+.moxpod-text-frame {
+  background: linear-gradient(160deg, #2b2f3a, #1a1d25);
+  border: 1px solid var(--moxpod-line);
+  padding: 6px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  overflow: hidden;
+}
+
+.moxpod-text-name { font-weight: 700; font-size: 11px; line-height: 1.15; }
+.moxpod-text-type { font-size: 9px; color: var(--moxpod-muted); }
+.moxpod-text-oracle {
+  font-size: 9px;
+  color: var(--moxpod-muted);
+  overflow: hidden;
+  flex: 1 1 auto;
+}
+
+/* ── Modifier badges — the whole point of the feature ─────────────── */
+
+.moxpod-badges {
+  position: absolute;
+  left: 50%;
+  bottom: -7px;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 3px;
+  z-index: 5;
+  pointer-events: none;
+}
+
+.moxpod-card.tapped .moxpod-badges { transform: translateX(-50%) rotate(-90deg); }
+.moxpod-card.rotated .moxpod-badges { transform: translateX(-50%) rotate(180deg); }
+
+.moxpod-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 5px;
+  border-radius: 9px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.5;
+  background: #1b1e26;
+  border: 1px solid var(--moxpod-line);
+  color: var(--moxpod-text);
+  white-space: nowrap;
+}
+
+.moxpod-badge.counter { background: #1e3a5f; border-color: #3b82f6; }
+.moxpod-badge.pt { background: #24272f; }
+.moxpod-badge.pt.modified { background: #4c1d24; border-color: var(--moxpod-bad); color: #fecaca; }
+.moxpod-badge.loyalty { background: #3f2d16; border-color: var(--moxpod-warn); }
+.moxpod-badge.warn { background: #47320c; border-color: var(--moxpod-warn); color: #fde68a; }
+
+/* ── Footer: vitals and zones ────────────────────────────────────── */
+
+.moxpod-footer {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--moxpod-line);
+  background: var(--moxpod-bg-2);
+  padding: 5px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  max-height: 55%;
+  overflow-y: auto;
+}
+
+.moxpod-vitals { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+
+.moxpod-vital {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  font-size: 13px;
+  color: var(--moxpod-muted);
+}
+
+.moxpod-vital i { font-style: normal; }
+.moxpod-vital b { font-size: 16px; color: var(--moxpod-text); font-variant-numeric: tabular-nums; }
+.moxpod-vital.life b { color: #fca5a5; font-size: 19px; }
+.moxpod-vital.hand b { color: #93c5fd; }
+
+.moxpod-stale { color: var(--moxpod-warn); font-size: 12px; }
+
+.moxpod-zones { display: flex; gap: 6px; flex-wrap: wrap; align-items: flex-start; }
+
+.moxpod-zone-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 14px;
+  border: 1px solid var(--moxpod-line);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--moxpod-text);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.moxpod-zone-chip:hover:not(:disabled) { background: rgba(255, 255, 255, 0.12); }
+.moxpod-zone-chip:disabled { opacity: 0.35; cursor: default; }
+.moxpod-zone-chip.open { border-color: var(--moxpod-accent); background: rgba(110, 168, 254, 0.15); }
+.moxpod-zone-chip b { font-variant-numeric: tabular-nums; }
+
+.moxpod-zone-browser {
+  width: 100%;
+  border: 1px solid var(--moxpod-line);
+  border-radius: 8px;
+  background: var(--moxpod-bg);
+  padding: 7px;
+  margin-top: 4px;
+}
+
+.moxpod-zone-browser-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 7px;
+  color: var(--moxpod-muted);
+}
+
+.moxpod-zone-browser-head strong { color: var(--moxpod-text); }
+.moxpod-zone-browser-head .moxpod-tool { margin-left: auto; }
+
+.moxpod-zone-grid {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 5px;
+}
+
+.moxpod-zone-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  flex: 0 0 auto;
+  cursor: pointer;
+}
+
+.moxpod-zone-card-name {
+  font-size: 10px;
+  color: var(--moxpod-muted);
+  max-width: 90px;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.moxpod-claim {
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 5px;
+  border: 1px solid var(--moxpod-line);
+  background: rgba(110, 168, 254, 0.14);
+  color: var(--moxpod-text);
+  cursor: pointer;
+}
+
+.moxpod-claim:hover:not(:disabled) { background: rgba(110, 168, 254, 0.3); }
+.moxpod-claim:disabled { opacity: 0.5; cursor: default; }
+
+/* ── Resizer ─────────────────────────────────────────────────────── */
+
+.moxpod-resizer {
+  position: absolute;
+  bottom: -3px;
+  left: 0;
+  right: 0;
+  height: 7px;
+  cursor: row-resize;
+  z-index: 5;
+}
+
+.moxpod-resizer:hover { background: rgba(110, 168, 254, 0.4); }
+
+/* ── Card detail ─────────────────────────────────────────────────── */
+
+.moxpod-detail-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483100;
+  background: rgba(0, 0, 0, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.moxpod-detail {
+  display: flex;
+  gap: 18px;
+  background: var(--moxpod-bg-2);
+  border: 1px solid var(--moxpod-line);
+  border-radius: 12px;
+  padding: 18px;
+  max-width: 720px;
+  max-height: 84vh;
+  overflow-y: auto;
+  color: var(--moxpod-text);
+  font: 14px/1.5 system-ui, sans-serif;
+}
+
+.moxpod-detail-art { flex: 0 0 auto; }
+.moxpod-detail-art.moxpod-card { height: 340px; }
+.moxpod-detail-info { flex: 1 1 auto; min-width: 260px; }
+.moxpod-detail-head { display: flex; align-items: baseline; gap: 10px; }
+.moxpod-detail-head h3 { margin: 0; font-size: 17px; }
+.moxpod-mana { color: var(--moxpod-muted); font-size: 13px; }
+.moxpod-detail-type { color: var(--moxpod-muted); font-size: 13px; margin: 2px 0 8px; }
+.moxpod-detail-oracle p { margin: 0 0 7px; }
+.moxpod-detail-pt { font-weight: 700; text-align: right; }
+.moxpod-detail-face + .moxpod-detail-face {
+  border-top: 1px solid var(--moxpod-line);
+  margin-top: 10px;
+  padding-top: 10px;
+}
+
+.moxpod-detail-mods {
+  margin-top: 14px;
+  border-top: 1px solid var(--moxpod-line);
+  padding-top: 10px;
+}
+
+.moxpod-detail-mods h4 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; color: var(--moxpod-muted); }
+.moxpod-detail-mods ul { margin: 0; padding-left: 18px; }
+.moxpod-detail-mods li { margin-bottom: 3px; }
+.moxpod-detail-mods li.muted { color: var(--moxpod-muted); list-style: none; margin-left: -18px; }
+
+/* ── Dev console ─────────────────────────────────────────────────── */
+
+.moxpod-debug {
+  position: fixed;
+  right: 12px;
+  bottom: 12px;
+  width: min(760px, calc(100vw - 24px));
+  height: min(520px, calc(100vh - 24px));
+  z-index: 2147483200;
+  display: flex;
+  flex-direction: column;
+  background: #0f1116;
+  color: #d8dce4;
+  border: 1px solid var(--moxpod-line);
+  border-radius: 10px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
+  font: 12px/1.45 ui-monospace, "Cascadia Code", Consolas, monospace;
+  overflow: hidden;
+}
+
+.moxpod-debug.hidden { display: none; }
+
+.moxpod-debug-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 9px;
+  background: #171a21;
+  border-bottom: 1px solid var(--moxpod-line);
+}
+
+.moxpod-debug-spacer { flex: 1 1 auto; }
+
+.moxpod-debug-head button,
+.moxpod-debug-row button,
+.moxpod-debug-toolbar button {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--moxpod-line);
+  color: inherit;
+  border-radius: 5px;
+  padding: 3px 9px;
+  cursor: pointer;
+  font: inherit;
+}
+
+.moxpod-debug-head button:hover,
+.moxpod-debug-row button:hover,
+.moxpod-debug-toolbar button:hover { background: rgba(255, 255, 255, 0.14); }
+
+.moxpod-debug-tabs button.active,
+.moxpod-debug-row button.active {
+  background: rgba(110, 168, 254, 0.2);
+  border-color: var(--moxpod-accent);
+  color: #fff;
+}
+
+.moxpod-debug-tabs { display: flex; gap: 3px; }
+.moxpod-debug-body { flex: 1 1 auto; overflow: auto; }
+
+.moxpod-debug-toolbar {
+  display: flex;
+  gap: 6px;
+  padding: 6px 9px;
+  border-bottom: 1px solid var(--moxpod-line);
+  align-items: center;
+  position: sticky;
+  top: 0;
+  background: #0f1116;
+  z-index: 2;
+}
+
+.moxpod-debug-toolbar select,
+.moxpod-debug-toolbar input,
+.moxpod-debug-row select,
+.moxpod-debug-row input {
+  background: #171a21;
+  color: inherit;
+  border: 1px solid var(--moxpod-line);
+  border-radius: 5px;
+  padding: 3px 6px;
+  font: inherit;
+}
+
+.moxpod-debug-toolbar input { flex: 1 1 auto; }
+.moxpod-debug-count { color: var(--moxpod-muted); }
+
+.moxpod-debug-log { padding: 4px 0; }
+
+.moxpod-log-row {
+  display: grid;
+  grid-template-columns: 62px 54px 190px 1fr;
+  gap: 8px;
+  padding: 1px 9px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.moxpod-log-row i { color: #566; font-style: normal; text-align: right; }
+.moxpod-log-row em { color: var(--moxpod-accent); font-style: normal; }
+.moxpod-log-row b { color: #e2e8f0; font-weight: 600; }
+.moxpod-log-row span { color: var(--moxpod-muted); overflow: hidden; text-overflow: ellipsis; }
+.moxpod-log-row.warn { background: rgba(251, 191, 36, 0.08); }
+.moxpod-log-row.warn b { color: var(--moxpod-warn); }
+.moxpod-log-row.error { background: rgba(248, 113, 113, 0.1); }
+.moxpod-log-row.error b { color: var(--moxpod-bad); }
+
+.moxpod-debug-pad { padding: 10px 12px; }
+.moxpod-debug-row { display: flex; gap: 7px; flex-wrap: wrap; align-items: center; margin: 9px 0; }
+.moxpod-debug-row label { display: inline-flex; gap: 5px; align-items: center; color: var(--moxpod-muted); }
+
+.moxpod-debug-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 10px;
+  padding: 10px 12px;
+}
+
+.moxpod-debug-grid section {
+  border: 1px solid var(--moxpod-line);
+  border-radius: 7px;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.moxpod-debug-grid h4 { margin: 0 0 7px; font-size: 11px; text-transform: uppercase; color: var(--moxpod-accent); }
+
+.moxpod-kv { display: flex; justify-content: space-between; gap: 10px; padding: 1px 0; }
+.moxpod-kv span { color: var(--moxpod-muted); }
+.moxpod-kv b { font-variant-numeric: tabular-nums; }
+.moxpod-kv.bad b { color: var(--moxpod-bad); }
+
+.moxpod-debug-foot {
+  display: flex;
+  gap: 14px;
+  padding: 5px 10px;
+  border-top: 1px solid var(--moxpod-line);
+  background: #171a21;
+  color: var(--moxpod-muted);
+}
+
+.moxpod-debug-foot b { color: #e2e8f0; font-variant-numeric: tabular-nums; }
+.moxpod-debug-foot .bad b { color: var(--moxpod-bad); }
+
+.moxpod-debug-pre {
+  background: #171a21;
+  border: 1px solid var(--moxpod-line);
+  border-radius: 6px;
+  padding: 8px;
+  overflow-x: auto;
+  color: var(--moxpod-muted);
+}
+
+.moxpod-debug .muted, .moxpod-panel .muted { color: var(--moxpod-muted); }
+.moxpod-debug code { color: var(--moxpod-accent); }
