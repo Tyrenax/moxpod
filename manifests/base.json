@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
-  "name": "MoxMox",
-  "version": "1.3.0",
+  "name": "MoxPod",
+  "version": "0.1.0",
   "author": "Nate Finch",
   "homepage_url": "https://github.com/natefinch/moxmox",
-  "description": "MoxMox lets you play DanDan style shared deck games right in moxfield's playtest mode. It also augments using moxfield's playtest mode for commander games, letting you see your opponent's hand size, pass control of cards to them, and easily view their graveyard, or show them your hand secretly.",
+  "description": "MoxPod ajoute aux parties Commander de Moxfield la vue du board des adversaires : un joueur affiché à la fois, avec ses marqueurs, ses modificateurs de force/endurance, sa vie, son cimetiere et son exil. Fork de MoxMox (Nate Finch).",
   "permissions": [
     "alarms",
     "storage"
@@ -13,7 +13,10 @@
     "http://localhost:8787/*",
     "https://api.github.com/*",
     "https://*.workers.dev/*",
-    "https://archidekt.com/*"
+    "https://archidekt.com/*",
+    "http://localhost:*/*",
+    "https://cards.scryfall.io/*",
+    "https://api.scryfall.com/*"
   ],
   "icons": {
     "16": "icons/moxmox-16.png",
@@ -32,7 +35,8 @@
         "content.js"
       ],
       "css": [
-        "styles.css"
+        "styles.css",
+        "moxpod.css"
       ],
       "run_at": "document_idle"
     },
@@ -60,6 +64,6 @@
       "128": "icons/moxmox-128.png"
     },
     "default_popup": "popup.html",
-    "default_title": "MoxMox"
+    "default_title": "MoxPod"
   }
 }
