@@ -15,7 +15,10 @@ import { dirname, join } from 'node:path';
 import { BoardBatcher } from '../src/board/batcher.js';
 import { RemoteBoardStore } from '../src/board/store.js';
 import { encodeSnapshot } from '../src/board/serialize.js';
-import { ACTION_FULL, ACTION_DELTA, ACTION_REQUEST } from '../src/board/protocol.js';
+import {
+  ACTION_FULL, ACTION_DELTA, ACTION_REQUEST,
+  packEnvelope, unpackEnvelope, RELAY_ALLOWED_ZONE_SYNC_FIELDS,
+} from '../src/board/protocol.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = 8800 + Math.floor(Math.random() * 150);
@@ -157,6 +160,79 @@ describe('dev relay handshake', () => {
   });
 });
 
+describe('relay field whitelist', () => {
+  // The bug this suite exists for: the production worker rebuilds every
+  // relayed message keeping only the fields whitelisted for its type, so a
+  // top-level `snapshot` is silently dropped and the spectator waits forever.
+  // The dev relay reproduces that, so these assertions mean something.
+
+  it('drops a payload sent at the top level', async () => {
+    const a = await connect('WHITE1', 'A', 'key-white-a-0001');
+    const b = await connect('WHITE1', 'B', 'key-white-b-0001');
+
+    a.send({
+      type: 'zone-sync', action: ACTION_FULL,
+      snapshot: { marker: 'should not survive' },
+      zoneId: 'z1', cardName: 'Sol Ring',
+    });
+    const relayed = await b.waitFor(m => m.type === 'zone-sync');
+
+    assert.equal(relayed.action, ACTION_FULL, 'action survives');
+    assert.equal(relayed.snapshot, undefined, 'snapshot must have been stripped');
+    assert.equal(relayed.zoneId, undefined, 'zoneId must have been stripped');
+    assert.equal(relayed.cardName, undefined, 'cardName must have been stripped');
+
+    a.close(); b.close();
+    await sleep(100);
+  });
+
+  it('carries the same payload intact once wrapped by packEnvelope', async () => {
+    const a = await connect('WHITE2', 'A', 'key-white2-a-001');
+    const b = await connect('WHITE2', 'B', 'key-white2-b-001');
+
+    const snapshot = board([card({ tapped: true, counters: 3 })]);
+    a.send({ type: 'zone-sync', ...packEnvelope(ACTION_FULL, { snapshot }) });
+
+    const relayed = await b.waitFor(m => m.type === 'zone-sync');
+    const msg = unpackEnvelope(relayed);
+    assert.equal(msg.action, ACTION_FULL);
+    assert.ok(msg.snapshot, 'payload did not survive the whitelist');
+    assert.deepEqual(msg.snapshot.zones.battlefield, snapshot.zones.battlefield);
+
+    a.close(); b.close();
+    await sleep(100);
+  });
+
+  it('only ever emits fields the relay allows', () => {
+    const packed = packEnvelope(
+      ACTION_FULL, { snapshot: { a: 1 }, zoneId: 'x' }, { targetId: 'p2', zone: 'graveyard' },
+    );
+    for (const key of Object.keys(packed)) {
+      assert.ok(
+        RELAY_ALLOWED_ZONE_SYNC_FIELDS.has(key),
+        `packEnvelope emitted "${key}", which the relay would strip`,
+      );
+    }
+    assert.deepEqual(unpackEnvelope({ ...packed, senderId: 'p1' }).snapshot, { a: 1 });
+  });
+
+  it('unpacks a message that was not wrapped, for a forked relay', () => {
+    const msg = unpackEnvelope({ action: ACTION_FULL, snapshot: { a: 1 } });
+    assert.deepEqual(msg.snapshot, { a: 1 });
+  });
+
+  it('rejects a player key shorter than production requires', async () => {
+    const ws = new WebSocket(`ws://${BASE}/room/KEYLEN`);
+    const inbox = [];
+    ws.addEventListener('message', e => inbox.push(JSON.parse(e.data)));
+    await new Promise(r => ws.addEventListener('open', r, { once: true }));
+    // 15 characters: accepted by the old dev relay, refused by production.
+    ws.send(JSON.stringify({ type: 'join', playerKey: 'x'.repeat(15), username: 'Short' }));
+    await sleep(300);
+    assert.ok(inbox.some(m => m.rejected), 'dev relay must match production key length');
+  });
+});
+
 describe('board sync over the wire', () => {
   it('mirrors a board from one client to another, byte for byte', async () => {
     const owner = await connect('SYNC01', 'Owner', 'key-sync-own-001');
@@ -164,7 +240,7 @@ describe('board sync over the wire', () => {
 
     const store = new RemoteBoardStore();
     spy.ws.addEventListener('message', (event) => {
-      const msg = JSON.parse(event.data);
+      const msg = unpackEnvelope(JSON.parse(event.data));
       if (msg.type !== 'zone-sync') return;
       if (msg.action === ACTION_FULL) store.ingestFull(msg.senderId, msg.snapshot);
       if (msg.action === ACTION_DELTA) store.ingestDelta(msg.senderId, msg.delta);
@@ -177,7 +253,7 @@ describe('board sync over the wire', () => {
     ];
     const batcher = new BoardBatcher({
       capture: () => board(cards),
-      send: msg => owner.send({ type: 'zone-sync', ...msg }),
+      send: ({ action, ...payload }) => owner.send({ type: 'zone-sync', ...packEnvelope(action, payload) }),
     });
 
     batcher.start();
@@ -223,14 +299,14 @@ describe('board sync over the wire', () => {
 
     const batcher = new BoardBatcher({
       capture: () => board([card()], { counts: { hand: 7, library: 92 } }),
-      send: msg => owner.send({ type: 'zone-sync', ...msg }),
+      send: ({ action, ...payload }) => owner.send({ type: 'zone-sync', ...packEnvelope(action, payload) }),
     });
     batcher.start();
     await sleep(600);
 
     assert.ok(frames.length > 0, 'no frames captured');
     for (const frame of frames) {
-      const parsed = JSON.parse(frame);
+      const parsed = unpackEnvelope(JSON.parse(frame));
       const zones = parsed.snapshot?.zones || {};
       assert.equal(zones.hand, undefined, 'hand leaked onto the wire');
       assert.equal(zones.library, undefined, 'library leaked onto the wire');
@@ -246,7 +322,7 @@ describe('board sync over the wire', () => {
     const b = await connect('ROUTE1', 'B', 'key-route-b-0001');
     const c = await connect('ROUTE1', 'C', 'key-route-c-0001');
 
-    b.send({ type: 'zone-sync', action: ACTION_REQUEST, targetId: a.playerId });
+    b.send({ type: 'zone-sync', ...packEnvelope(ACTION_REQUEST, {}, { targetId: a.playerId }) });
     await sleep(300);
 
     assert.ok(a.inbox.some(m => m.action === ACTION_REQUEST), 'target did not receive it');
@@ -262,7 +338,7 @@ describe('board sync over the wire', () => {
 
     const store = new RemoteBoardStore();
     spy.ws.addEventListener('message', (event) => {
-      const msg = JSON.parse(event.data);
+      const msg = unpackEnvelope(JSON.parse(event.data));
       if (msg.type !== 'zone-sync') return;
       if (msg.action === ACTION_FULL) store.ingestFull(msg.senderId, msg.snapshot);
       if (msg.action === ACTION_DELTA) store.ingestDelta(msg.senderId, msg.delta);
@@ -274,7 +350,7 @@ describe('board sync over the wire', () => {
     }
     const batcher = new BoardBatcher({
       capture: () => board(cards),
-      send: msg => owner.send({ type: 'zone-sync', ...msg }),
+      send: ({ action, ...payload }) => owner.send({ type: 'zone-sync', ...packEnvelope(action, payload) }),
     });
     batcher.start();
 
@@ -319,7 +395,7 @@ describe('board sync over the wire', () => {
 
     let dropNext = 0;
     spy.ws.addEventListener('message', (event) => {
-      const msg = JSON.parse(event.data);
+      const msg = unpackEnvelope(JSON.parse(event.data));
       if (msg.type !== 'zone-sync') return;
       // Deliberately drop the second delta to simulate packet loss.
       if (msg.action === ACTION_DELTA && ++dropNext === 2) return;
@@ -330,7 +406,7 @@ describe('board sync over the wire', () => {
     const cards = [card({ zoneId: '1' })];
     const batcher = new BoardBatcher({
       capture: () => board(cards),
-      send: msg => owner.send({ type: 'zone-sync', ...msg }),
+      send: ({ action, ...payload }) => owner.send({ type: 'zone-sync', ...packEnvelope(action, payload) }),
       config: { keyframeMs: 2000 },
     });
     batcher.start();

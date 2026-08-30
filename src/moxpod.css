@@ -154,8 +154,10 @@ body.moxpod-resizing {
   inset: 0;
 }
 
-.moxpod-board.flipped { transform: rotate(180deg); }
-.moxpod-board.flipped .moxpod-card-slot { transform: translate(-50%, -50%) rotate(180deg); }
+/* The "from across the table" view mirrors CARD POSITIONS only (done in JS,
+ * see _buildBattlefieldCard). Rotating the container here as well would cancel
+ * that out, and rotating without counter-rotating each slot would leave every
+ * card upside down. So: no transform on the board. */
 
 .moxpod-empty {
   position: absolute;
@@ -197,7 +199,8 @@ body.moxpod-resizing {
 .moxpod-card.tapped { transform: rotate(90deg); }
 .moxpod-card.rotated { transform: rotate(180deg); }
 .moxpod-card.tapped.rotated { transform: rotate(270deg); }
-.moxpod-card-slot:hover .moxpod-card { transform: scale(1.06); z-index: 50; }
+.moxpod-card-slot:hover { z-index: 500 !important; }
+.moxpod-card-slot:hover .moxpod-card { transform: scale(1.06); }
 .moxpod-card-slot:hover .moxpod-card.tapped { transform: rotate(90deg) scale(1.06); }
 
 .moxpod-card.compact { height: calc(var(--moxpod-card-h) * 0.85); }

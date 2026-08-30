@@ -7,6 +7,17 @@
 import { emptySnapshot, applyDelta, hydrateCard } from './serialize.js';
 import { BROWSABLE_ZONES } from './protocol.js';
 
+/** Untrusted numerics from the wire, normalised once at the boundary. */
+function toNumberOrNull(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function toCount(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0;
+}
+
 export class RemoteBoardStore {
   /**
    * @param {object} [options]
@@ -29,6 +40,7 @@ export class RemoteBoardStore {
     const entry = this._entry(playerId);
     entry.snapshot = snapshot;
     entry.updatedAt = this._now();
+    entry.lastFrameAt = entry.updatedAt;
     entry.frames++;
     this._onTrace({
       kind: 'board:recv-full', playerId, rev: snapshot.rev,
@@ -50,6 +62,9 @@ export class RemoteBoardStore {
 
     if (gap) {
       entry.gaps++;
+      // Frames ARE arriving, they are just unusable. Without this the panel
+      // would claim the board is "frozen for Ns" while we spam resyncs.
+      entry.lastFrameAt = this._now();
       this._onTrace({
         kind: 'board:gap', playerId, expected: entry.snapshot?.rev, got: delta.base,
       });
@@ -59,6 +74,7 @@ export class RemoteBoardStore {
 
     entry.snapshot = snapshot;
     entry.updatedAt = this._now();
+    entry.lastFrameAt = entry.updatedAt;
     this._onTrace({
       kind: 'board:recv-delta', playerId, rev: delta.rev, ops: delta.ops?.length || 0,
     });
@@ -68,7 +84,7 @@ export class RemoteBoardStore {
   _entry(playerId) {
     let entry = this._boards.get(playerId);
     if (!entry) {
-      entry = { snapshot: emptySnapshot(), updatedAt: 0, gaps: 0, frames: 0 };
+      entry = { snapshot: emptySnapshot(), updatedAt: 0, lastFrameAt: 0, gaps: 0, frames: 0 };
       this._boards.set(playerId, entry);
     }
     return entry;
@@ -117,15 +133,17 @@ export class RemoteBoardStore {
     return {
       playerId,
       rev: snap.rev,
-      life: snap.life,
-      turn: snap.turn,
+      // Life and turn come off the wire from a peer. Coerce here, once, so no
+      // renderer downstream has to wonder whether it holds a number.
+      life: toNumberOrNull(snap.life),
+      turn: toNumberOrNull(snap.turn),
       counters: snap.counters || {},
-      handCount: snap.counts?.hand || 0,
-      libraryCount: snap.counts?.library || 0,
+      handCount: toCount(snap.counts?.hand),
+      libraryCount: toCount(snap.counts?.library),
       battlefield,
       zones,
       updatedAt: entry.updatedAt,
-      staleMs: this._now() - entry.updatedAt,
+      staleMs: this._now() - (entry.lastFrameAt || entry.updatedAt),
       gaps: entry.gaps,
       frames: entry.frames,
       unknownCards: battlefield.filter(c => !c.known).length,

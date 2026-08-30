@@ -239,7 +239,9 @@ export class MoxfieldAdapter {
       case 'get-hand-cards': return this._getZoneCards('hand');
       case 'get-zone-cards': return this._getZoneCards(params.zone);
       case 'get-board-state': return this._getBoardSnapshot();
-      case 'gift-to-player': return await this.giveCardToOpponent(params.targetId, params.zoneId);
+      case 'gift-to-player':
+        return await this.giveCardToOpponent(params.targetId, params.zoneId, params.expectedZone);
+      case 'find-card': return this._findCardForClaim(params.zoneId, params.zone);
       case 'gift-add-battlefield': return await this._addGiftedCardToBattlefield(params.gift, {
         preserveGift: params.preserveGift !== false,
       });
@@ -266,10 +268,16 @@ export class MoxfieldAdapter {
 
   // ── Give card to opponent (called from gift menu) ───────────────────
 
-  async giveCardToOpponent(targetId, zoneId) {
+  async giveCardToOpponent(targetId, zoneId, expectedZone = null) {
     if (!targetId || !zoneId || !this._giftState.enabled || !this._giftState.localPlayerId) return null;
     const found = this._controller.findCardByZoneId(zoneId);
     if (!found) throw new Error('Card no longer exists');
+    // findCardByZoneId searches every zone. When the caller says which zone it
+    // expects (a claim from a spectator names one), refuse anything else --
+    // otherwise a crafted zoneId could pull a permanent off the battlefield.
+    if (expectedZone && found.zone !== expectedZone) {
+      throw new Error(`Card is in ${found.zone}, not ${expectedZone}`);
+    }
     if (found.moxmoxGift) {
       if (found.moxmoxGift.ownerId !== targetId) {
         throw new Error('Gifted cards can only be returned to their owner');
@@ -366,6 +374,18 @@ export class MoxfieldAdapter {
         library: state.zones.library?.length || 0,
       },
     });
+  }
+
+  /**
+   * Resolve a zoneId for the claim flow. Returns only what the dialogue needs,
+   * and only when the card really is in the zone the requester named.
+   */
+  _findCardForClaim(zoneId, zone) {
+    if (!zoneId || !READABLE_ZONES.has(zone)) return { error: 'Unsupported zone' };
+    const cards = this._getInstance().state.zones[zone] || [];
+    const card = cards.find(c => String(c.zoneId) === String(zoneId));
+    if (!card) return { error: 'Card not found in that zone' };
+    return { card: { name: card.name, set: card.set, cn: card.cn, zone } };
   }
 
   _getLibrary() {

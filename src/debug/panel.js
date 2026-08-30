@@ -328,7 +328,7 @@ class DebugPanel {
         <div class="moxpod-debug-grid">
           ${ids.map(id => `
             <section>
-              <h4>${id}</h4>
+              <h4>${escapeHtml(id)}</h4>
               ${kv('révision', described[id].rev)}
               ${kv('permanents', described[id].permanents)}
               ${kv('impressions connues', described[id].dictSize)}

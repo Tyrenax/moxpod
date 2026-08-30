@@ -43,6 +43,36 @@ function round(n, digits) {
   return Math.round(n * f) / f;
 }
 
+/**
+ * Moxfield's `counters` is a plain number on a fresh permanent, but the gift
+ * path upstream also handles it as a map of counter kind -> count, and we have
+ * seen both. Normalise to a canonical form so:
+ *   * the badge never renders "[object Object]", and
+ *   * diffing compares by value, not by object identity, which would otherwise
+ *     emit a delta for every countered card on every single flush.
+ * Returns a number when there is one kind, or a key-sorted map otherwise.
+ */
+export function normaliseCounters(value) {
+  if (!value) return 0;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+  if (typeof value !== 'object') return 0;
+
+  const entries = Object.entries(value)
+    .filter(([, count]) => Number.isFinite(Number(count)) && Number(count) !== 0)
+    .map(([kind, count]) => [kind, Number(count)])
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+
+  if (entries.length === 0) return 0;
+  return Object.fromEntries(entries);
+}
+
+/** Total number of counters, whatever shape they arrived in. */
+export function countersTotal(value) {
+  if (typeof value === 'number') return value;
+  if (!value || typeof value !== 'object') return 0;
+  return Object.values(value).reduce((sum, n) => sum + (Number(n) || 0), 0);
+}
+
 /** Compact volatile state for one battlefield card. Default values are omitted. */
 export function encodeCardState(card, geometry) {
   const out = {};
@@ -51,7 +81,8 @@ export function encodeCardState(card, geometry) {
   out.y = round(pos.y, 4);
   for (const key of STATE_WIRE_KEYS) {
     if (key === 'x' || key === 'y') continue;
-    const value = card[STATE_KEYS[key]];
+    let value = card[STATE_KEYS[key]];
+    if (key === 'c') value = normaliseCounters(value);
     if (value === undefined || value === null || value === false || value === 0) continue;
     out[key] = value === true ? 1 : value;
   }
@@ -156,8 +187,17 @@ export function diffSnapshots(prev, next) {
       continue;
     }
     const changed = diffState(before.s, entry.s);
-    if (changed) {
-      ops.push({ o: OP_UPSERT, i: zoneId, k: entry.k, z: 'battlefield', s: changed });
+    const printingChanged = before.k !== entry.k;
+    if (changed || printingChanged) {
+      ops.push({
+        o: OP_UPSERT, i: zoneId, k: entry.k, z: 'battlefield', s: changed || {},
+      });
+    }
+    // A card can change printing in place (a transform, a copy effect). The
+    // receiver would render "Unknown card" until the next keyframe unless we
+    // ship the new dictionary entry along with it.
+    if (printingChanged && next.dict[entry.k] && !prev.dict?.[entry.k]) {
+      dict[entry.k] = next.dict[entry.k];
     }
   }
 
@@ -208,6 +248,14 @@ function diffState(prev = {}, next = {}) {
     const a = prev[key];
     const b = next[key];
     if (a === b) continue;
+    // Counters can be a map. Compare by value, or two equal maps would look
+    // different every flush and spam a delta per countered card.
+    if (typeof a === 'object' || typeof b === 'object') {
+      if (JSON.stringify(a ?? 0) === JSON.stringify(b ?? 0)) continue;
+      changed[key] = b ?? 0;
+      dirty = true;
+      continue;
+    }
     // An omitted key means "default" (0/false); normalise before comparing so
     // a card returning to its default still emits an explicit reset.
     if ((a ?? 0) === (b ?? 0)) continue;
@@ -331,7 +379,9 @@ export function hydrateCard(entry, dict) {
     flipped: !!state.f,
     rotated: !!state.r,
     doesntUntap: !!state.u,
-    counters: state.c || 0,
+    counters: countersTotal(state.c),
+    // Present only when the owner has several kinds of counter, for the tooltip.
+    counterDetail: state.c && typeof state.c === 'object' ? state.c : null,
     adjustedPower: state.p || 0,
     adjustedToughness: state.g || 0,
     adjustedLoyalty: state.l || 0,

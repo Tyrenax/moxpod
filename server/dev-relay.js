@@ -5,10 +5,13 @@
 // two-session game on one machine: open two browser profiles (or a normal and
 // an incognito window), point both at this relay, and you have a live pod.
 //
-// It mirrors the production worker's wire protocol exactly -- same message
-// shapes, same playerId scheme, same token bucket -- so anything that works
-// here works against the real relay. The differences are all developer
-// affordances:
+// It mirrors the production worker's wire protocol -- same message shapes,
+// same playerId scheme, same token bucket, and crucially the same per-type
+// FIELD WHITELIST (RELAY_FIELDS below), which rebuilds every relayed message
+// and drops anything not explicitly allowed. Without that last part a dev
+// relay happily carries a protocol the real one silently truncates.
+//
+// The differences are all deliberate developer affordances:
 //
 //   * every frame is printed, in and out, with size and direction
 //   * --rate lets you tighten or loosen the bucket to reproduce throttling
@@ -19,6 +22,7 @@
 //   node server/dev-relay.js --port 9000 --verbose
 //   node server/dev-relay.js --rate 1           # provoke rate limiting
 //   node server/dev-relay.js --latency 250 --loss 0.05
+//   node server/dev-relay.js --no-sanitize        # disable the field whitelist
 //
 // Then in the extension popup, set the relay URL to ws://localhost:8787
 
@@ -27,7 +31,44 @@ import crypto from 'node:crypto';
 
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 const MAX_MESSAGE_BYTES = 65536;
-const MIN_PLAYER_KEY_LENGTH = 8;
+const MIN_PLAYER_KEY_LENGTH = 16;
+
+// Mirrored verbatim from server/src/index.js. The production worker does NOT
+// forward messages as received: it rebuilds each one keeping only the fields
+// whitelisted for its type, and silently drops the rest.
+//
+// This is the single most important thing this file has to reproduce. A dev
+// relay that forwards everything makes the whole test suite pass against a
+// protocol the real relay will not carry -- which is exactly the bug this
+// comment exists to prevent recurring. Use --no-sanitize only to prove that
+// a failure is caused by the whitelist.
+const VALID_TYPES = new Set([
+  'drawCard', 'discard', 'join', 'ping', 'leave',
+  'game-init', 'game-ready', 'game-start',
+  'zone-sync', 'life-sync', 'hand-count-sync',
+]);
+
+const RELAY_FIELDS = {
+  'zone-sync': new Set(['action', 'zone', 'cardId', 'scryfallId', 'syncId', 'pctX', 'pctY',
+    'fromZone', 'toZone', 'updates', 'syncIds', 'cards', 'targetId', 'gift']),
+  'life-sync': new Set(['life']),
+  'hand-count-sync': new Set(['handCount']),
+  'game-init': new Set(['library']),
+  'game-ready': new Set(['drawnCount']),
+  'game-start': new Set([]),
+  drawCard: new Set([]),
+  discard: new Set([]),
+};
+
+function sanitizeRelayMessage(parsed) {
+  const allowed = RELAY_FIELDS[parsed.type];
+  if (!allowed) return null;
+  const clean = { type: parsed.type };
+  for (const key of allowed) {
+    if (key in parsed) clean[key] = parsed[key];
+  }
+  return clean;
+}
 
 const args = parseArgs(process.argv.slice(2));
 const CONFIG = {
@@ -38,6 +79,9 @@ const CONFIG = {
   lossRate: Number(args.loss ?? 0),
   verbose: args.verbose === true || args.v === true,
   quiet: args.quiet === true,
+  // Escape hatch: forward messages unfiltered, to prove a bug is caused by
+  // the production field whitelist. Off by default -- fidelity beats comfort.
+  sanitize: args['no-sanitize'] !== true,
 };
 
 /** roomId -> { gameType, maxPlayers, shareBattlefield, shareGraveyardExile, records[], sockets:Set } */
@@ -177,15 +221,31 @@ function handleMessage(conn, text) {
 
   if (parsed.type === 'leave') { closeConn(conn); return; }
 
+  if (!VALID_TYPES.has(parsed.type)) {
+    if (CONFIG.verbose) log('drop', `unknown type ${parsed.type} from ${conn.playerId}`);
+    return;
+  }
+
   if (!takeToken(conn)) {
     send(conn, { type: 'error', code: 'rate_limited', text: 'Slow down' });
     log('rate', `${conn.playerId} rate limited on ${parsed.type}`);
     return;
   }
 
-  const outbound = { ...parsed, senderId: conn.playerId, username: conn.username };
-  if (parsed.type === 'zone-sync' && parsed.targetId) {
-    sendToTarget(conn, parsed.targetId, outbound);
+  const sanitized = CONFIG.sanitize ? sanitizeRelayMessage(parsed) : { ...parsed };
+  if (!sanitized) return;
+  if (CONFIG.sanitize && CONFIG.verbose) {
+    const dropped = Object.keys(parsed).filter(k => !(k in sanitized) && k !== 'type');
+    if (dropped.length) {
+      log('strip', `${conn.playerId} ${parsed.type}: dropped ${dropped.join(', ')}`);
+    }
+  }
+
+  // The relay is the authority on who you are: it overwrites username with the
+  // authenticated value from join.
+  const outbound = { ...sanitized, senderId: conn.playerId, username: conn.username };
+  if (sanitized.type === 'zone-sync' && sanitized.targetId) {
+    sendToTarget(conn, sanitized.targetId, outbound);
   } else {
     broadcast(conn.roomId, outbound, conn);
   }
@@ -481,6 +541,7 @@ server.listen(CONFIG.port, () => {
   console.log(`  ws://localhost:${CONFIG.port}/room/<roomId>`);
   console.log(`  health: http://localhost:${CONFIG.port}/health`);
   console.log(`  rate ${CONFIG.rateMaxTokens}/s` +
+    (CONFIG.sanitize ? ', field whitelist ON (as production)' : ', WHITELIST OFF') +
     (CONFIG.latencyMs ? `, +${CONFIG.latencyMs}ms latency` : '') +
     (CONFIG.lossRate ? `, ${Math.round(CONFIG.lossRate * 100)}% loss` : '') +
     (CONFIG.verbose ? ', verbose' : '') + '\n');

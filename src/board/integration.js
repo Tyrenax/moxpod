@@ -10,10 +10,15 @@ import { BoardBatcher } from './batcher.js';
 import { RemoteBoardStore } from './store.js';
 import { SpectatorPanel } from './panel.js';
 import { BoardSimulator } from '../debug/simulator.js';
-import { ACTION_FULL, ACTION_DELTA, ACTION_REQUEST } from './protocol.js';
+import {
+  ACTION_FULL, ACTION_DELTA, ACTION_REQUEST, BROWSABLE_ZONES,
+  packEnvelope, unpackEnvelope,
+} from './protocol.js';
 
 const CLAIM_REQUEST = 'board-claim-request';
 const CLAIM_DENY = 'board-claim-deny';
+
+const CLAIMABLE_ZONES = new Set(BROWSABLE_ZONES);
 
 export function createBoardFeature(deps) {
   const {
@@ -35,8 +40,8 @@ export function createBoardFeature(deps) {
 
   const batcher = new BoardBatcher({
     capture: () => captureLocalBoard(),
-    send: message => {
-      sendWs({ type: 'zone-sync', ...message });
+    send: ({ action, ...payload }) => {
+      sendWs({ type: 'zone-sync', ...packEnvelope(action, payload) });
       tracer.rate('board:out');
     },
     onTrace: event => tracer.trace('board', event.kind, event),
@@ -61,6 +66,13 @@ export function createBoardFeature(deps) {
   // reading the board crosses into the MAIN world, which is async. We keep the
   // most recent read and kick off the next one, so the batcher always has
   // something fresh-enough to diff without ever blocking.
+  //
+  // DELIBERATE: a successful read calls markDirty(), which arms the next flush,
+  // which starts the next read. That self-sustaining ~3 Hz loop is what keeps
+  // the 15 s keyframe alive, because flush() only runs while the board is
+  // marked dirty -- break the loop and a late spectator never self-heals.
+  // The cost is bounded: a flush with no real change refunds its token and
+  // sends nothing, so an idle board costs a fiber read and a diff, not traffic.
   let latestSnapshot = null;
   let capturePending = false;
 
@@ -91,8 +103,15 @@ export function createBoardFeature(deps) {
   }
 
   function requestResync(playerId) {
-    if (!playerId || !isTraditional()) return;
-    sendWs({ type: 'zone-sync', action: ACTION_REQUEST, targetId: playerId });
+    if (!playerId) return;
+    // Simulated opponents have no socket; serve their resync locally, or the
+    // debug panel's "inject a desync" button would freeze the board forever.
+    if (simulator.running && simulator.ownsPlayer(playerId)) {
+      simulator.resend(playerId);
+      return;
+    }
+    if (!isTraditional()) return;
+    sendWs({ type: 'zone-sync', ...packEnvelope(ACTION_REQUEST, {}, { targetId: playerId }) });
     tracer.info('board', 'resync:sent', { playerId });
   }
 
@@ -100,12 +119,11 @@ export function createBoardFeature(deps) {
     if (!playerId || !card) return;
     sendWs({
       type: 'zone-sync',
-      action: CLAIM_REQUEST,
-      targetId: playerId,
-      zone,
-      zoneId: card.zoneId,
-      cardName: card.name,
-      username: await getUsername(),
+      ...packEnvelope(
+        CLAIM_REQUEST,
+        { zoneId: card.zoneId, cardName: card.name },
+        { targetId: playerId, zone },
+      ),
     });
     tracer.info('board', 'claim:requested', { playerId, zone, card: card.name });
     notify?.(`Demande envoyée pour ${card.name}.`);
@@ -114,26 +132,52 @@ export function createBoardFeature(deps) {
   /**
    * Someone wants a card out of one of our zones. We ask before handing it
    * over -- it mutates our board, so it is our call, not theirs.
+   *
+   * The request names a zoneId, and the underlying lookup searches EVERY zone.
+   * So we resolve the card ourselves first and build the dialogue from what we
+   * actually found, never from the requester's text: otherwise a peer could
+   * show "wants Sol Ring from your graveyard" while pointing at your
+   * commander in play.
    */
   async function handleClaimRequest(msg) {
-    const who = msg.username || 'Un adversaire';
+    const zone = msg.zone;
+    if (!CLAIMABLE_ZONES.has(zone)) {
+      tracer.warn('board', 'claim:rejected-zone', { from: msg.senderId, zone });
+      return;
+    }
+
+    const found = await sendCmd('find-card', { zoneId: msg.zoneId, zone });
+    if (!found || found.error || !found.card) {
+      tracer.warn('board', 'claim:rejected-card', {
+        from: msg.senderId, zone, reason: found?.error || 'not found',
+      });
+      sendWs({
+        type: 'zone-sync',
+        ...packEnvelope(CLAIM_DENY, { cardName: msg.cardName }, { targetId: msg.senderId }),
+      });
+      return;
+    }
+
+    const who = remoteUsernameFor(msg.senderId);
+    const zoneLabel = zone === 'graveyard' ? 'cimetière' : zone === 'exile' ? 'exil' : zone;
     const accepted = await confirmClaim({
       title: 'Demande de carte',
-      text: `${who} demande « ${msg.cardName || 'une carte'} » depuis votre ${
-        msg.zone === 'graveyard' ? 'cimetière' : msg.zone}.`,
+      // found.card.name, not msg.cardName: the requester does not get to
+      // write the text of your own dialogue.
+      text: `${who} demande « ${found.card.name} » depuis votre ${zoneLabel}.`,
     });
     if (!accepted) {
       sendWs({
-        type: 'zone-sync', action: CLAIM_DENY, targetId: msg.senderId,
-        cardName: msg.cardName,
+        type: 'zone-sync',
+        ...packEnvelope(CLAIM_DENY, { cardName: found.card.name }, { targetId: msg.senderId }),
       });
-      tracer.info('board', 'claim:denied', { to: msg.senderId, card: msg.cardName });
+      tracer.info('board', 'claim:denied', { to: msg.senderId, card: found.card.name });
       return;
     }
 
     try {
       const result = await sendCmd('gift-to-player', {
-        targetId: msg.senderId, zoneId: msg.zoneId,
+        targetId: msg.senderId, zoneId: msg.zoneId, expectedZone: zone,
       });
       if (!result || result.error) throw new Error(result?.error || 'Carte introuvable');
       sendWs({
@@ -143,11 +187,16 @@ export function createBoardFeature(deps) {
         gift: result.gift,
       });
       batcher.markDirty();
-      tracer.info('board', 'claim:granted', { to: msg.senderId, card: msg.cardName });
+      tracer.info('board', 'claim:granted', { to: msg.senderId, card: found.card.name });
     } catch (err) {
-      tracer.capture('board', 'claim:failed', err, { card: msg.cardName });
-      notify?.(`Impossible de céder ${msg.cardName} : ${err.message}`);
+      tracer.capture('board', 'claim:failed', err, { card: found.card.name });
+      notify?.(`Impossible de céder ${found.card.name} : ${err.message}`);
     }
+  }
+
+  function remoteUsernameFor(playerId) {
+    const player = getPlayers().find(p => p.id === playerId);
+    return player?.username || 'Un adversaire';
   }
 
   function savePrefs(prefs) {
@@ -214,24 +263,35 @@ export function createBoardFeature(deps) {
      * Board-related zone-sync frames. Returns true when handled, so the
      * caller's existing switch can ignore them.
      */
-    handleRemoteSync(msg) {
+    handleRemoteSync(raw) {
+      // The public relay strips unknown top-level fields, so payloads arrive
+      // inside `updates`. unpackEnvelope accepts both shapes.
+      const msg = unpackEnvelope(raw);
       switch (msg.action) {
         case ACTION_FULL:
+          if (!started) return true;
           if (msg.senderId && msg.snapshot) store.ingestFull(msg.senderId, msg.snapshot);
+          else tracer.warn('board', 'recv:full-without-payload', { from: msg.senderId });
           tracer.rate('board:in');
           return true;
         case ACTION_DELTA:
+          if (!started) return true;
           if (msg.senderId && msg.delta) store.ingestDelta(msg.senderId, msg.delta);
+          else tracer.warn('board', 'recv:delta-without-payload', { from: msg.senderId });
           tracer.rate('board:in');
           return true;
         case ACTION_REQUEST:
+          if (!started) return true;
           tracer.info('board', 'resync:serving', { to: msg.senderId });
           batcher.requestFull();
           return true;
         case CLAIM_REQUEST:
+          // Never act on a claim outside a live traditional game.
+          if (!started) return true;
           handleClaimRequest(msg);
           return true;
         case CLAIM_DENY:
+          if (!started) return true;
           notify?.(`Demande refusée pour ${msg.cardName || 'la carte'}.`);
           tracer.info('board', 'claim:refused', { by: msg.senderId });
           return true;

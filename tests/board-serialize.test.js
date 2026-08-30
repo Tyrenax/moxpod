@@ -292,3 +292,56 @@ describe('emptySnapshot', () => {
     }
   });
 });
+
+describe('counters that arrive as a map', () => {
+  it('normalises an object of counter kinds and keeps the breakdown', () => {
+    const snap = snapshotOf([card({ counters: { '-1/-1': 2, '+1/+1': 1 } })]);
+    const state = snap.zones.battlefield[0].s;
+    assert.deepEqual(state.c, { '+1/+1': 1, '-1/-1': 2 }, 'keys must be sorted for stable diffing');
+
+    const view = hydrateCard(snap.zones.battlefield[0], snap.dict);
+    assert.equal(view.counters, 3, 'badge shows the total');
+    assert.deepEqual(view.counterDetail, { '+1/+1': 1, '-1/-1': 2 });
+  });
+
+  it('does not emit a delta when an equal counter map is re-encoded', () => {
+    // Two structurally equal maps are different objects. Comparing by
+    // reference would emit a delta for every countered card, every flush.
+    const a = snapshotOf([card({ counters: { '+1/+1': 2 } })]);
+    const b = snapshotOf([card({ counters: { '+1/+1': 2 } })], { rev: 2 });
+    assert.equal(diffSnapshots(a, b), null);
+  });
+
+  it('does emit a delta when the map actually changes', () => {
+    const a = snapshotOf([card({ counters: { '+1/+1': 2 } })]);
+    const b = snapshotOf([card({ counters: { '+1/+1': 3 } })], { rev: 2 });
+    const { delta } = diffSnapshots(a, b);
+    assert.deepEqual(delta.ops[0].s.c, { '+1/+1': 3 });
+  });
+
+  it('drops zero-valued kinds so an emptied map equals no counters', () => {
+    const snap = snapshotOf([card({ counters: { '+1/+1': 0 } })]);
+    assert.equal(snap.zones.battlefield[0].s.c, undefined);
+  });
+
+  it('still handles the plain number case', () => {
+    const snap = snapshotOf([card({ counters: 4 })]);
+    assert.equal(snap.zones.battlefield[0].s.c, 4);
+    assert.equal(hydrateCard(snap.zones.battlefield[0], snap.dict).counters, 4);
+  });
+});
+
+describe('a card that changes printing in place', () => {
+  it('ships the new dictionary entry with the upsert', () => {
+    // A transform or a copy effect keeps the zoneId but changes the printing.
+    const a = snapshotOf([card({ zoneId: '1', scryfall_id: 'front-id', name: 'Front' })]);
+    const b = snapshotOf([card({ zoneId: '1', scryfall_id: 'back-id', name: 'Back' })], { rev: 2 });
+    const { delta } = diffSnapshots(a, b);
+
+    assert.ok(delta.dict['back-id'], 'new printing must travel with the op');
+    const { snapshot } = applyDelta(a, delta);
+    const view = hydrateCard(snapshot.zones.battlefield[0], snapshot.dict);
+    assert.equal(view.known, true);
+    assert.equal(view.name, 'Back');
+  });
+});

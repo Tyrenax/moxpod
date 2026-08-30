@@ -98,9 +98,23 @@ cross-client, qui exige l'initialisation d'une bibliothèque partagée). Le
 
 ## 4. Le protocole
 
-On se greffe sur le type `zone-sync` de MoxMox. Le relais valide les `type`
-mais **n'inspecte jamais les `action`** — les nouvelles actions passent donc
-telles quelles sur le relais public, sans rien déployer.
+On se greffe sur le type `zone-sync` de MoxMox. Les nouvelles `action` passent
+bien — mais **attention, le relais public filtre aussi les champs par type**
+(`RELAY_FIELDS` dans `server/src/index.js`) : il reconstruit chaque message en
+ne gardant que les clés autorisées et jette silencieusement le reste.
+
+Pour `zone-sync`, passent uniquement : `action`, `zone`, `cardId`,
+`scryfallId`, `syncId`, `pctX`, `pctY`, `fromZone`, `toZone`, `updates`,
+`syncIds`, `cards`, `targetId`, `gift`.
+
+Un `snapshot` ou un `delta` posé au premier niveau **est supprimé** : la frame
+arrive avec son action et sans charge utile. `updates` est whitelisté et
+accepte du JSON arbitraire, donc **tous les payloads MoxPod voyagent dedans**,
+via `packEnvelope` / `unpackEnvelope` (`src/board/protocol.js`) — le seul
+endroit du code où cette contrainte est encodée.
+
+`unpackEnvelope` accepte aussi la forme non emballée, pour qu'un worker forké
+sans ce filtre fonctionne sans changer une ligne de client.
 
 | Action | Sens | Contenu |
 |---|---|---|
@@ -236,8 +250,13 @@ npm run relay:lossy        # +150 ms de latence et 5 % de perte
 ```
 
 Zéro dépendance (handshake et framing WebSocket écrits à la main), et il
-reproduit exactement le protocole du worker de prod : mêmes messages, mêmes
-`playerId` (`p1`, `p2`…), même seau à jetons.
+reproduit le protocole du worker de prod : mêmes messages, mêmes `playerId`
+(`p1`, `p2`…), même seau à jetons, même longueur minimale de clé joueur, et
+surtout **le même whitelist de champs**. Ce dernier point est le plus
+important : un relais de dev qui relaie tout laisse passer un protocole que le
+vrai relais tronque, et la suite de tests reste verte pour rien.
+`--no-sanitize` désactive le filtre, uniquement pour prouver qu'un bug vient
+bien de lui.
 
 **Procédure à deux sessions sur une seule machine :**
 
@@ -281,12 +300,21 @@ sur 12 permanents, puis comparaison **carte par carte** du board reçu avec le
 board émis (position, engagement, marqueurs). Il lance le vrai
 `server/dev-relay.js` en sous-processus — s'il passe, deux onglets marchent.
 
-Trois vrais bugs ont été trouvés par ces tests pendant le développement :
+Bugs trouvés par ces tests pendant le développement :
 
 1. Le simulateur avançait sa révision même quand un tick ne changeait rien →
    toutes les frames suivantes lues comme des trous (39 désyncs sur 60 ticks).
 2. `injectGap()` bougeait la mauvaise variable et ne provoquait aucune désync.
 3. Le batcher dépensait un jeton pour un flush vide.
+4. `parseInt('1+*')` renvoie `1` : une endurance type Tarmogoyf s'affichait
+   silencieusement comme `1`.
+
+Et une classe entière de bugs que les tests **n'ont pas** attrapée jusqu'à ce
+qu'une relecture la trouve : le relais de dev ne reproduisait pas le whitelist
+de champs, donc toute la synchro passait en local et **rien** ne serait passé
+sur le relais public. C'est corrigé, et `tests/relay-integration.test.js` a
+maintenant une suite « relay field whitelist » qui vérifie explicitement qu'un
+payload posé au premier niveau est bien détruit et que l'enveloppe survit.
 
 ---
 
@@ -300,8 +328,13 @@ Trois vrais bugs ont été trouvés par ces tests pendant le développement :
    l'onglet Setup existe pour diagnostiquer vite.
 3. **Le partage d'écran pousse le `body`.** Si une mise à jour de Moxfield
    casse le calage, la sonde DOM dit quel conteneur viser.
-4. **Cartes double-face** : les deux faces sont transmises, mais seule la face
-   avant est illustrée sur le board.
+4. **Cartes double-face** : les deux faces sont transmises et lisibles dans le
+   détail, mais seule la face avant est illustrée sur le board.
+7. **Le claim est consenti, mais pas arbitré.** Le propriétaire voit une
+   demande construite à partir de la carte réellement trouvée dans la zone
+   annoncée (jamais à partir du texte envoyé par le demandeur), et le transfert
+   est refusé si la carte n'est pas dans cette zone. Reste que c'est un accord
+   entre joueurs, pas une règle appliquée.
 5. **Tokens sans `scryfall_id`** : cadre textuel au lieu d'une image.
 6. Le mode `shared` (DanDan) d'origine est intact et non touché.
 

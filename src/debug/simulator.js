@@ -163,6 +163,24 @@ export class BoardSimulator {
     this._onRoster(this.players);
   }
 
+  /** Is this playerId one of ours? Used to route resyncs locally. */
+  ownsPlayer(playerId) {
+    return this._players.some(p => p.id === playerId);
+  }
+
+  /**
+   * Serve a resync for a fake player. Without this, "inject a desync" would
+   * freeze the simulated board forever: every later delta cites a base the
+   * store never saw, and no real peer exists to answer the resync request.
+   */
+  resend(playerId) {
+    const player = this._players.find(p => p.id === playerId);
+    if (!player) return false;
+    this._store.ingestFull(player.id, deepCopy(player.snapshot));
+    this._tracer.trace('sim', 'resync:served', { playerId, rev: player.snapshot.rev }, 'info');
+    return true;
+  }
+
   /** Drop a frame on purpose, to exercise gap detection and resync. */
   injectGap(playerId = null) {
     const player = playerId

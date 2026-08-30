@@ -64,6 +64,9 @@ export class SpectatorPanel {
     this._detailCard = null;
     this._renderQueued = false;
     this._keyHandler = null;
+    // zoneIds with a claim in flight, so the button stays disabled across the
+    // re-render that the very next incoming frame triggers.
+    this._pendingClaims = new Set();
   }
 
   // ── Lifecycle ─────────────────────────────────────────────────────
@@ -89,11 +92,11 @@ export class SpectatorPanel {
         </div>
       </div>
       <div class="moxpod-stage">
-        <div class="moxpod-board" aria-live="polite"></div>
+        <div class="moxpod-board"></div>
         <div class="moxpod-empty">En attente du board…</div>
       </div>
       <div class="moxpod-footer">
-        <div class="moxpod-vitals"></div>
+        <div class="moxpod-vitals" aria-live="polite"></div>
         <div class="moxpod-zones"></div>
       </div>
       <div class="moxpod-resizer" title="Glisser pour redimensionner"></div>
@@ -154,6 +157,7 @@ export class SpectatorPanel {
     if (!playerId || playerId === this._activeId) return;
     this._activeId = playerId;
     this._openZone = null;
+    this._pendingClaims.clear();
     this._tracer.trace('ui', 'panel:select', { playerId });
     this.render();
   }
@@ -222,15 +226,19 @@ export class SpectatorPanel {
       tab.classList.toggle('offline', player.connected === false);
       if (player.simulated) tab.classList.add('simulated');
 
-      const life = view?.life ?? player.life;
-      const hand = view?.handCount ?? player.handCount;
+      // Everything below comes off the wire, so nothing is interpolated into
+      // innerHTML -- a peer could otherwise put markup in a life total.
       tab.innerHTML = `
-        <span class="moxpod-tab-key">${index + 1}</span>
+        <span class="moxpod-tab-key"></span>
         <span class="moxpod-tab-name"></span>
-        <span class="moxpod-tab-stat" title="Points de vie">❤ <b>${fmt(life)}</b></span>
-        <span class="moxpod-tab-stat" title="Cartes en main">🂠 <b>${fmt(hand)}</b></span>
+        <span class="moxpod-tab-stat" title="Points de vie">❤ <b></b></span>
+        <span class="moxpod-tab-stat" title="Cartes en main">🂠 <b></b></span>
       `;
+      const stats = tab.querySelectorAll('.moxpod-tab-stat b');
+      tab.querySelector('.moxpod-tab-key').textContent = String(index + 1);
       tab.querySelector('.moxpod-tab-name').textContent = player.username || 'Anonyme';
+      stats[0].textContent = fmt(view?.life ?? player.life);
+      stats[1].textContent = fmt(view?.handCount ?? player.handCount);
       list.appendChild(tab);
     }
   }
@@ -322,12 +330,14 @@ export class SpectatorPanel {
     item.appendChild(label);
 
     if (this._onClaim) {
+      const pending = this._pendingClaims.has(card.zoneId);
       const claim = document.createElement('button');
       claim.className = 'moxpod-claim';
       claim.dataset.act = 'claim';
       claim.dataset.zone = zone;
       claim.dataset.zoneId = card.zoneId;
-      claim.textContent = 'Demander';
+      claim.textContent = pending ? 'Demandé…' : 'Demander';
+      claim.disabled = pending;
       claim.title = `Demander ${card.name} à son propriétaire`;
       item.appendChild(claim);
     }
@@ -337,6 +347,9 @@ export class SpectatorPanel {
   _renderBoard(view) {
     const board = this._els.board;
     board.replaceChildren();
+    // The flip is done by mirroring coordinates below, NOT by rotating the
+    // container: rotating it and counter-rotating each slot cancels out, and
+    // rotating without the counter-rotation leaves every card upside down.
     board.classList.toggle('flipped', this.prefs.flipped);
     if (!view) return;
 
@@ -398,7 +411,10 @@ export class SpectatorPanel {
     badges.className = 'moxpod-badges';
 
     if (card.counters) {
-      badges.appendChild(badge('counter', `◈ ${card.counters}`, `${card.counters} marqueur(s)`));
+      const detail = card.counterDetail
+        ? Object.entries(card.counterDetail).map(([kind, n]) => `${n} × ${kind}`).join(', ')
+        : `${card.counters} marqueur(s)`;
+      badges.appendChild(badge('counter', `◈ ${card.counters}`, detail));
     }
     const pt = effectivePT(card);
     if (pt) {
@@ -553,6 +569,7 @@ export class SpectatorPanel {
         event.stopPropagation();
         const card = this._findCard(target.dataset.zoneId, target.dataset.zone);
         if (card && this._onClaim) {
+          this._pendingClaims.add(card.zoneId);
           this._onClaim(this._activeId, target.dataset.zone, card);
           target.textContent = 'Demandé…';
           target.disabled = true;
@@ -630,8 +647,10 @@ export class SpectatorPanel {
       if (event.ctrlKey || event.metaKey || event.altKey) return;
 
       if (event.key === 'Escape') {
+        // Peel one layer at a time: detail, then zone browser, then the panel.
         if (this._detailCard) { this.closeDetail(); event.stopPropagation(); }
         else if (this._openZone) { this._openZone = null; this.render(); event.stopPropagation(); }
+        else { this.setVisible(false); event.stopPropagation(); }
         return;
       }
       // Arrows only when the pointer is over the panel, so they keep working
@@ -659,8 +678,9 @@ export class SpectatorPanel {
 export function cardImageUrl(card) {
   const id = card.key || '';
   if (/^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(id)) {
-    const face = card.layout === 'transform' || card.layout === 'modal_dfc' ? 'front' : 'front';
-    return `https://cards.scryfall.io/normal/${face}/${id[0]}/${id[1]}/${id}.jpg`;
+    // Always the front face: rendering the back of a transformed permanent is
+    // a known gap, tracked in MOXPOD.md.
+    return `https://cards.scryfall.io/normal/front/${id[0]}/${id[1]}/${id}.jpg`;
   }
   if (card.set && card.cn) {
     return `https://api.scryfall.com/cards/${encodeURIComponent(card.set)}/${encodeURIComponent(card.cn)}?format=image`;
@@ -719,8 +739,11 @@ function signed(n) {
   return value >= 0 ? `+${value}` : String(value);
 }
 
+/** Wire values are untrusted: render numbers as numbers, never as text. */
 function fmt(value) {
-  return value == null ? '–' : String(value);
+  if (value == null) return '–';
+  const n = Number(value);
+  return Number.isFinite(n) ? String(n) : '–';
 }
 
 function badge(kind, text, title) {

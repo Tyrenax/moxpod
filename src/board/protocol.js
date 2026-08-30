@@ -4,9 +4,19 @@
 //
 // DESIGN NOTES
 // ------------
-// 1. We piggyback on MoxMox's `zone-sync` message type. The relay whitelists
-//    message *types* but never inspects `action`, so new actions pass through
-//    the public relay untouched. See server/src/index.js VALID_TYPES.
+// 1. We piggyback on MoxMox's `zone-sync` message type. New `action` values do
+//    pass through the public relay -- but the relay ALSO whitelists fields per
+//    type (RELAY_FIELDS in server/src/index.js), and rebuilds each message from
+//    scratch keeping only the allowed keys. For `zone-sync` that is:
+//
+//      action, zone, cardId, scryfallId, syncId, pctX, pctY, fromZone,
+//      toZone, updates, syncIds, cards, targetId, gift
+//
+//    A top-level `snapshot` or `delta` is silently dropped, so the frame
+//    arrives with its action intact and no payload. `updates` is whitelisted
+//    and carries arbitrary JSON, so every MoxPod payload travels inside it.
+//    See packEnvelope/unpackEnvelope below -- that is the only place this
+//    constraint is encoded.
 //
 // 2. The relay enforces a token bucket of 5 messages/sec (burst 5) and a
 //    64 KB max frame. So we send ONE batched message per tick rather than
@@ -78,6 +88,42 @@ export const PLAYER_COUNTERS = [
 export const OP_UPSERT = 'u';   // card added or state changed in a zone
 export const OP_REMOVE = 'r';   // card left every mirrored zone
 export const OP_ZONE = 'z';     // full replacement of a non-battlefield zone
+
+/**
+ * Fields the public relay lets through on a `zone-sync` message. Mirrored from
+ * server/src/index.js RELAY_FIELDS so tests can assert against it.
+ */
+export const RELAY_ALLOWED_ZONE_SYNC_FIELDS = new Set([
+  'action', 'zone', 'cardId', 'scryfallId', 'syncId', 'pctX', 'pctY',
+  'fromZone', 'toZone', 'updates', 'syncIds', 'cards', 'targetId', 'gift',
+]);
+
+/**
+ * Wrap a MoxPod payload so it survives the relay's field whitelist.
+ *
+ * Everything that is not a whitelisted key goes inside `updates`. Callers pass
+ * `passthrough` for the handful of fields that are already allowed through at
+ * the top level (`zone`, `targetId`), because the relay preserves those and
+ * some upstream code paths read them directly.
+ */
+export function packEnvelope(action, payload = {}, passthrough = {}) {
+  const message = { action, ...passthrough };
+  if (payload && Object.keys(payload).length > 0) message.updates = payload;
+  return message;
+}
+
+/**
+ * Read a payload back out, accepting both shapes: wrapped in `updates` (what
+ * the public relay delivers) and at the top level (what a forked worker
+ * without the whitelist, or a direct peer connection, would deliver).
+ */
+export function unpackEnvelope(message) {
+  const wrapped = message?.updates;
+  if (wrapped && typeof wrapped === 'object' && !Array.isArray(wrapped)) {
+    return { ...message, ...wrapped };
+  }
+  return message || {};
+}
 
 /**
  * Build the stable dictionary key for a card. Printings are shared across

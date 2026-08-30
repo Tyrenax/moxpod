@@ -447,3 +447,57 @@ describe('Tracer', () => {
     assert.ok(LEVELS.warn < LEVELS.error);
   });
 });
+
+describe('simulator resync', () => {
+  it('serves its own resync so an injected desync recovers', () => {
+    const resyncs = [];
+    const store = new RemoteBoardStore({ onResyncNeeded: id => resyncs.push(id) });
+    const sim = new BoardSimulator({ store, ...NO_TIMERS });
+    sim.configure({ players: 1, permanents: 4, seed: 11 });
+    sim.start();
+
+    sim.injectGap('sim-1');
+    for (let i = 0; i < 6; i++) sim.step();
+    assert.ok(resyncs.length > 0, 'no desync was detected');
+    const stalled = store.view('sim-1').rev;
+
+    // What createBoardFeature does when the resync targets a simulated player.
+    assert.equal(sim.ownsPlayer('sim-1'), true);
+    assert.equal(sim.ownsPlayer('p2'), false);
+    sim.resend('sim-1');
+
+    const healed = store.view('sim-1');
+    assert.ok(healed.rev > stalled, 'resync did not advance the board');
+
+    const gapsBefore = healed.gaps;
+    for (let i = 0; i < 6; i++) sim.step();
+    assert.equal(store.view('sim-1').gaps, gapsBefore, 'still desyncing after the resync');
+  });
+});
+
+describe('store hardening', () => {
+  it('coerces a life total that arrived as markup', () => {
+    const store = new RemoteBoardStore();
+    const snap = makeBoard([card()]);
+    snap.life = '<img src=x onerror=alert(1)>';
+    snap.counts = { hand: '<b>7</b>', library: -5 };
+    store.ingestFull('p1', snap);
+
+    const view = store.view('p1');
+    assert.equal(view.life, null, 'non-numeric life must not reach the renderer');
+    assert.equal(view.handCount, 0);
+    assert.equal(view.libraryCount, 0);
+  });
+
+  it('does not report a board as frozen while unusable frames keep arriving', () => {
+    let clock = 1000;
+    const store = new RemoteBoardStore({ now: () => clock });
+    const first = makeBoard([card()]);
+    first.rev = 1;
+    store.ingestFull('p1', first);
+
+    clock += 20000;
+    store.ingestDelta('p1', { rev: 99, base: 98, ops: [] });
+    assert.ok(store.view('p1').staleMs < 1000, 'gap frames must count as contact');
+  });
+});
