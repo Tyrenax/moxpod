@@ -5,8 +5,11 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const ROOT = new URL('../..', import.meta.url).pathname;
+// fileURLToPath, not URL.pathname: on Windows the latter yields "/C:/..."
+// which join() then turns into "C:\C:\...".
+const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const DIST = join(ROOT, 'dist');
 
 function readJson(path) {
@@ -72,13 +75,14 @@ describe('built extension artifacts', () => {
 
       const manifest = readJson(manifestPath);
       assert.equal(manifest.manifest_version, 3);
-      assert.equal(manifest.name, 'MoxMox');
+      assert.equal(manifest.name, 'MoxPod');
       assert.equal(typeof manifest.version, 'string');
       assertManifestReferencedFilesExist(browser, manifest);
 
       assertFileExists(distPath(browser, 'popup.js'));
       assertFileExists(distPath(browser, 'popup.html'));
       assertFileExists(distPath(browser, 'styles.css'));
+      assertFileExists(distPath(browser, 'moxpod.css'));
       assertDirExists(distPath(browser, 'icons'));
     });
   }
@@ -106,7 +110,7 @@ describe('built extension artifacts', () => {
       assert.ok(contentScript, `${browser} should include content.js`);
       assert.ok(contentScript.matches.includes('https://moxfield.com/*'));
       assert.ok(contentScript.matches.includes('https://archidekt.com/*'));
-      assert.deepEqual(contentScript.css, ['styles.css']);
+      assert.deepEqual(contentScript.css, ['styles.css', 'moxpod.css']);
       assert.equal(contentScript.run_at, 'document_idle');
     }
   });

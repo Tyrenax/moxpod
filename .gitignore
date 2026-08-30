@@ -6,3 +6,6 @@ dist/
 playwright-report/
 test-results/
 web-ext-artifacts/
+
+# local wrangler state
+server/.wrangler/
