@@ -1,10 +1,26 @@
 import { expect, test } from '@playwright/test';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 import { installNetworkGuard, launchExtensionContext } from './extension-fixture.js';
 
 const MOXFIELD_PLAYTEST_URL = 'https://moxfield.com/decks/e2e/goldfish';
 const ARCHIDEKT_PLAYTEST_URL = 'https://archidekt.com/playtester-v2/21256567';
-const GITHUB_LATEST_URL = 'https://api.github.com/repos/natefinch/moxmox/releases/latest';
+
+// Read the release-check URL out of the source instead of duplicating it.
+// Hardcoding it here meant that repointing the updater at the fork left this
+// mock covering the wrong repo, the real request escaped the network guard,
+// and the whole E2E suite failed on a one-line change in background.js.
+const GITHUB_LATEST_URL = readReleaseUrl();
+
+function readReleaseUrl() {
+  const source = readFileSync(
+    fileURLToPath(new URL('../../src/background.js', import.meta.url)), 'utf8',
+  );
+  const match = source.match(/LATEST_RELEASE_URL\s*=\s*'([^']+)'/);
+  if (!match) throw new Error('Could not find LATEST_RELEASE_URL in src/background.js');
+  return match[1];
+}
 
 test('loads the built extension on a manifest-matched Moxfield playtest origin', async () => {
   const extension = await launchExtensionContext();
@@ -131,8 +147,8 @@ test('mocks background service-worker update checks through the real runtime han
     const guard = await installNetworkGuard(extension.context);
     await routeGithubLatest(extension.context, {
       tag_name: 'v9.9.9',
-      name: 'MoxMox 9.9.9',
-      html_url: 'https://github.com/natefinch/moxmox/releases/tag/v9.9.9',
+      name: 'MoxPod 9.9.9',
+      html_url: 'https://github.com/Tyrenax/moxpod/releases/tag/v9.9.9',
     });
 
     const page = await extension.context.newPage();
@@ -145,7 +161,7 @@ test('mocks background service-worker update checks through the real runtime han
     expect(response.ok).toBe(true);
     expect(response.state.latestVersion).toBe('9.9.9');
     expect(response.state.updateAvailable).toBe(true);
-    expect(response.state.latestUrl).toBe('https://github.com/natefinch/moxmox/releases/tag/v9.9.9');
+    expect(response.state.latestUrl).toBe('https://github.com/Tyrenax/moxpod/releases/tag/v9.9.9');
     guard.assertNoEscapes();
   } finally {
     await extension.close();
@@ -184,8 +200,8 @@ async function routeGithubLatest(context, body = {}) {
       contentType: 'application/json',
       body: JSON.stringify({
         tag_name: 'v1.2.0',
-        name: 'MoxMox 1.2.0',
-        html_url: 'https://github.com/natefinch/moxmox/releases/tag/v1.2.0',
+        name: 'MoxPod 1.2.0',
+        html_url: GITHUB_LATEST_URL.replace('api.github.com/repos', 'github.com').replace('/releases/latest', '/releases/tag/v1.2.0'),
         ...body,
       }),
     });
