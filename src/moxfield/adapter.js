@@ -572,7 +572,7 @@ export class MoxfieldAdapter {
   _serializeGiftCard(card) {
     // Neutral format: minimal Scryfall-standard fields + playtest state.
     // The receiver's adapter fetches additional data from Scryfall if needed.
-    return {
+    const neutral = {
       scryfallId: card.scryfall_id || '',
       name: card.name || '',
       set: card.set || '',
@@ -589,6 +589,26 @@ export class MoxfieldAdapter {
       adjustedToughness: card.adjustedToughness || 0,
       adjustedLoyalty: card.adjustedLoyalty || 0,
     };
+
+    // A Moxfield receiver whose deck lacks this printing cannot rebuild a
+    // renderable card from the neutral fields alone -- Moxfield's own renderer
+    // needs the full card object (id, uniqueCardId, image metadata), and a
+    // card built without them shows as an empty frame on their battlefield.
+    // So ship the giver's full card too, minus the per-copy playtest state.
+    const full = { ...card };
+    for (const key of [
+      'zone', 'zoneId', 'syncId', 'top', 'left', 'zIndex',
+      'tapped', 'flipped', 'rotated', 'doesntUntap', 'counters',
+      'adjustedPower', 'adjustedToughness', 'adjustedLoyalty', 'moxmoxGift',
+    ]) {
+      delete full[key];
+    }
+    try {
+      // One-off message; stay far under the relay's 64 KB frame cap.
+      if (JSON.stringify(full).length <= 20000) neutral.moxfield = full;
+    } catch { /* unserialisable card: neutral format only */ }
+
+    return neutral;
   }
 
   _materializeGiftedCard(gift, zone, { preserveGift = true } = {}) {
@@ -612,6 +632,15 @@ export class MoxfieldAdapter {
         syncId: gift.giftId,
         zoneId: this._generateZoneId(),
       };
+    } else if (gift.card.moxfield && typeof gift.card.moxfield === 'object') {
+      // The giver shipped their full Moxfield card object: use it verbatim so
+      // Moxfield's renderer has everything it needs (image included).
+      card = {
+        ...JSON.parse(JSON.stringify(gift.card.moxfield)),
+        zone,
+        syncId: gift.giftId,
+        zoneId: this._generateZoneId(),
+      };
     } else {
       // Card not in our deck — create from the gift data (cross-site case).
       card = {
@@ -621,6 +650,7 @@ export class MoxfieldAdapter {
         zoneId: this._generateZoneId(),
         scryfall_id: scryfallId,
       };
+      delete card.moxfield;
     }
 
     delete card.moxmoxGift;

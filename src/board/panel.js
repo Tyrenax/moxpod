@@ -53,7 +53,12 @@ export class SpectatorPanel {
     this.prefs = {
       splitPercent: 50,
       flipped: false,      // render the board as seen from across the table
-      visible: false,
+      // Default VISIBLE: seeing the opponents' boards is the whole feature, so
+      // a first-run profile (fresh browser, private window) must get it
+      // without knowing about the popup or the dev console. start() applies
+      // `visible !== false`, which only stays false when the user saved that
+      // choice themselves.
+      visible: true,
       showDetails: true,
     };
 
@@ -468,7 +473,7 @@ export class SpectatorPanel {
       head.className = 'moxpod-detail-head';
       head.innerHTML = `<h3></h3><span class="moxpod-mana"></span>`;
       head.querySelector('h3').textContent = f.name || card.name;
-      head.querySelector('.moxpod-mana').textContent = f.manaCost || '';
+      appendManaText(head.querySelector('.moxpod-mana'), f.manaCost || '');
       block.appendChild(head);
 
       const type = document.createElement('div');
@@ -481,7 +486,7 @@ export class SpectatorPanel {
         oracle.className = 'moxpod-detail-oracle';
         for (const line of String(f.oracleText).split('\n')) {
           const p = document.createElement('p');
-          p.textContent = line;
+          appendManaText(p, line);
           oracle.appendChild(p);
         }
         block.appendChild(oracle);
@@ -690,25 +695,38 @@ export function cardImageUrl(card) {
 
 /** Effective power/toughness, flagged when the owner has modified it. */
 export function effectivePT(card) {
-  const hasBase = card.power != null && card.power !== '' &&
-    card.toughness != null && card.toughness !== '';
-  const delta = (card.adjustedPower || 0) || (card.adjustedToughness || 0);
-  if (!hasBase && !delta) return null;
+  // Moxfield stores adjustedPower/adjustedToughness as the ABSOLUTE current
+  // P/T, not a delta -- the playtest auto-fills them with the printed values
+  // for every creature on the battlefield. Verified in a live pod: adding
+  // them to the printed values doubled every creature's stats. 0/0 means
+  // "untouched", so we fall back to the printed line.
+  const printedPower = card.power;
+  const printedToughness = card.toughness;
+  const hasPrinted = printedPower != null && printedPower !== '' &&
+    printedToughness != null && printedToughness !== '';
+  const hasAdjust = !!(card.adjustedPower || card.adjustedToughness);
+  if (!hasPrinted && !hasAdjust) return null;
 
-  // Strict: parseInt('1+*') is 1, which would silently misreport a Tarmogoyf.
-  // A characteristic-defining P/T stays as printed and we show the modifier
-  // separately rather than inventing a number.
-  const basePower = wholeInteger(card.power);
-  const baseToughness = wholeInteger(card.toughness);
-  const power = basePower !== null ? basePower + (card.adjustedPower || 0) : card.power;
-  const toughness = baseToughness !== null
-    ? baseToughness + (card.adjustedToughness || 0) : card.toughness;
+  const power = hasAdjust ? (card.adjustedPower || 0) : printedPower;
+  const toughness = hasAdjust ? (card.adjustedToughness || 0) : printedToughness;
+  const modified = hasAdjust && (
+    String(power) !== String(printedPower ?? '') ||
+    String(toughness) !== String(printedToughness ?? '')
+  );
+
+  // Numeric printed values also get a signed delta for the tooltip; a
+  // characteristic-defining P/T (Tarmogoyf's */1+*) shows only the override.
+  const bp = wholeInteger(printedPower);
+  const bt = wholeInteger(printedToughness);
+  const delta = modified && bp !== null && bt !== null
+    ? `${signed((card.adjustedPower || 0) - bp)}/${signed((card.adjustedToughness || 0) - bt)}`
+    : null;
 
   return {
     text: `${power ?? '?'}/${toughness ?? '?'}`,
-    base: `${card.power ?? '?'}/${card.toughness ?? '?'}`,
-    delta: `${signed(card.adjustedPower)}/${signed(card.adjustedToughness)}`,
-    modified: !!(card.adjustedPower || card.adjustedToughness),
+    base: `${printedPower ?? '?'}/${printedToughness ?? '?'}`,
+    delta,
+    modified,
   };
 }
 
@@ -720,10 +738,11 @@ export function describeModifiers(card) {
   if (card.rotated) out.push('Pivotée à 180°');
   if (card.flipped) out.push('Face cachée');
   if (card.counters) out.push(`${card.counters} marqueur(s)`);
-  if (card.adjustedPower || card.adjustedToughness) {
-    out.push(`Force/endurance modifiée de ${signed(card.adjustedPower)}/${signed(card.adjustedToughness)}`);
+  const pt = effectivePT(card);
+  if (pt?.modified) {
+    out.push(`Force/endurance : ${pt.text} (imprimée ${pt.base}${pt.delta ? `, ${pt.delta}` : ''})`);
   }
-  if (card.adjustedLoyalty) out.push(`Loyauté modifiée de ${signed(card.adjustedLoyalty)}`);
+  if (card.adjustedLoyalty) out.push(`Loyauté : ${card.adjustedLoyalty}`);
   return out;
 }
 
@@ -764,6 +783,41 @@ function vital(icon, label, value, kind) {
 }
 
 /** Fallback frame for tokens and cards with no usable image. */
+/**
+ * Render rules text with real mana/tap symbols: "{T}: Add {R}." shows the tap
+ * icon and a red mana pip instead of literal braces. Symbols come from
+ * Scryfall's SVG set, addressed by code ({W/U} -> WU.svg); an unknown or
+ * unreachable symbol falls back to its original text, never an empty gap.
+ * Everything is built with createElement/textContent -- oracle text comes off
+ * the wire from a peer, so none of it may reach innerHTML.
+ */
+function appendManaText(el, text) {
+  const str = String(text ?? '');
+  const re = /\{([^}]{1,4})\}/g;
+  let last = 0;
+  let match;
+  while ((match = re.exec(str)) !== null) {
+    if (match.index > last) el.appendChild(document.createTextNode(str.slice(last, match.index)));
+    const code = match[1].replace(/\//g, '').toUpperCase();
+    if (/^[A-Z0-9½∞]{1,3}$/.test(code)) {
+      const img = document.createElement('img');
+      img.className = 'moxpod-symbol';
+      img.src = `https://svgs.scryfall.io/card-symbols/${encodeURIComponent(code)}.svg`;
+      img.alt = match[0];
+      img.draggable = false;
+      const original = match[0];
+      img.addEventListener('error', () => {
+        img.replaceWith(document.createTextNode(original));
+      }, { once: true });
+      el.appendChild(img);
+    } else {
+      el.appendChild(document.createTextNode(match[0]));
+    }
+    last = re.lastIndex;
+  }
+  if (last < str.length) el.appendChild(document.createTextNode(str.slice(last)));
+}
+
 function buildTextFrame(card) {
   const frame = document.createElement('div');
   frame.className = 'moxpod-text-frame';

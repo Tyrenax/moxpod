@@ -2,8 +2,8 @@
   "manifest_version": 3,
   "name": "MoxPod",
   "version": "0.1.0",
-  "author": "Nate Finch",
-  "homepage_url": "https://github.com/natefinch/moxmox",
+  "author": "Tyrenax",
+  "homepage_url": "https://github.com/Tyrenax/moxpod",
   "description": "MoxPod ajoute aux parties Commander de Moxfield la vue du board des adversaires : un joueur affiché à la fois, avec ses marqueurs, ses modificateurs de force/endurance, sa vie, son cimetiere et son exil. Fork de MoxMox (Nate Finch).",
   "permissions": [
     "alarms",

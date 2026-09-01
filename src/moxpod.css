@@ -432,6 +432,17 @@ body.moxpod-resizing {
 .moxpod-detail-head { display: flex; align-items: baseline; gap: 10px; }
 .moxpod-detail-head h3 { margin: 0; font-size: 17px; }
 .moxpod-mana { color: var(--moxpod-muted); font-size: 13px; }
+
+/* Inline mana/tap symbols inside rules text and mana costs. */
+.moxpod-symbol {
+  width: 1em;
+  height: 1em;
+  vertical-align: -0.14em;
+  margin: 0 0.04em;
+  border-radius: 50%;
+  box-shadow: -0.06em 0.07em 0 rgba(0, 0, 0, 0.55);
+}
+.moxpod-mana .moxpod-symbol { width: 1.1em; height: 1.1em; }
 .moxpod-detail-type { color: var(--moxpod-muted); font-size: 13px; margin: 2px 0 8px; }
 .moxpod-detail-oracle p { margin: 0 0 7px; }
 .moxpod-detail-pt { font-weight: 700; text-align: right; }

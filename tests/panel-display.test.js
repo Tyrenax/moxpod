@@ -18,6 +18,10 @@ function creature(overrides = {}) {
   };
 }
 
+// Moxfield stores adjustedPower/adjustedToughness as the ABSOLUTE current
+// P/T (auto-filled with the printed values), NOT a delta. These tests pin that
+// down: the live-pod bug where every creature showed doubled stats came from
+// adding the two together.
 describe('effectivePT', () => {
   it('shows the printed values when nothing was modified', () => {
     const pt = effectivePT(creature());
@@ -25,28 +29,36 @@ describe('effectivePT', () => {
     assert.equal(pt.modified, false);
   });
 
-  it('adds a -1/-1 to the printed values', () => {
-    const pt = effectivePT(creature({ adjustedPower: -1, adjustedToughness: -1 }));
+  it('is NOT modified when Moxfield auto-filled adjusted = printed', () => {
+    // The regression: a fresh 2/2 arrives with adjusted 2/2. It must display
+    // 2/2 unmodified, never 4/4.
+    const pt = effectivePT(creature({ adjustedPower: 2, adjustedToughness: 2 }));
+    assert.equal(pt.text, '2/2');
+    assert.equal(pt.modified, false);
+  });
+
+  it('shows the adjusted value as the current P/T, verbatim', () => {
+    const pt = effectivePT(creature({ adjustedPower: 1, adjustedToughness: 1 }));
     assert.equal(pt.text, '1/1');
     assert.equal(pt.modified, true);
     assert.equal(pt.base, '2/2');
     assert.equal(pt.delta, '-1/-1');
   });
 
-  it('adds a +2/+2 and signs the delta', () => {
-    const pt = effectivePT(creature({ adjustedPower: 2, adjustedToughness: 2 }));
+  it('signs the tooltip delta on a buff', () => {
+    const pt = effectivePT(creature({ adjustedPower: 4, adjustedToughness: 4 }));
     assert.equal(pt.text, '4/4');
     assert.equal(pt.delta, '+2/+2');
   });
 
-  it('handles an asymmetric modifier', () => {
-    const pt = effectivePT(creature({ adjustedPower: 3, adjustedToughness: -1 }));
+  it('handles an asymmetric override', () => {
+    const pt = effectivePT(creature({ adjustedPower: 5, adjustedToughness: 1 }));
     assert.equal(pt.text, '5/1');
     assert.equal(pt.delta, '+3/-1');
   });
 
   it('can take a creature below zero without pretending otherwise', () => {
-    const pt = effectivePT(creature({ adjustedPower: -5, adjustedToughness: -5 }));
+    const pt = effectivePT(creature({ adjustedPower: -3, adjustedToughness: -3 }));
     assert.equal(pt.text, '-3/-3');
     assert.equal(pt.modified, true);
   });
@@ -61,10 +73,11 @@ describe('effectivePT', () => {
     assert.equal(pt.modified, false);
   });
 
-  it('still reports a modifier on a star-power creature', () => {
+  it('shows the override on a star-power creature, without inventing a delta', () => {
     const pt = effectivePT(creature({ power: '*', toughness: '*', adjustedPower: 1, adjustedToughness: 1 }));
     assert.equal(pt.modified, true);
-    assert.equal(pt.delta, '+1/+1');
+    assert.equal(pt.text, '1/1');
+    assert.equal(pt.delta, null);
   });
 });
 
@@ -76,17 +89,21 @@ describe('describeModifiers', () => {
   it('lists everything the owner applied, in plain language', () => {
     const mods = describeModifiers(creature({
       tapped: true, doesntUntap: true, counters: 3,
-      adjustedPower: -1, adjustedToughness: -1,
+      adjustedPower: 1, adjustedToughness: 1,
     }));
     assert.ok(mods.includes('Engagée'));
     assert.ok(mods.includes('Ne se dégage pas au prochain tour'));
     assert.ok(mods.some(m => m.includes('3 marqueur')));
-    assert.ok(mods.some(m => m.includes('-1/-1')));
+    assert.ok(mods.some(m => m.includes('1/1') && m.includes('imprimée 2/2')));
   });
 
-  it('reports a loyalty change', () => {
-    const mods = describeModifiers(creature({ adjustedLoyalty: -2 }));
-    assert.ok(mods.some(m => m.includes('-2')));
+  it('says nothing about P/T that Moxfield auto-filled to the printed values', () => {
+    assert.deepEqual(describeModifiers(creature({ adjustedPower: 2, adjustedToughness: 2 })), []);
+  });
+
+  it('reports the current loyalty', () => {
+    const mods = describeModifiers(creature({ adjustedLoyalty: 2 }));
+    assert.ok(mods.some(m => m.includes('Loyauté : 2')));
   });
 
   it('reports a face-down permanent', () => {

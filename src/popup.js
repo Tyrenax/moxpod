@@ -21,7 +21,18 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (!state || !state.isGoldfish) {
     const msg = document.createElement('div');
     msg.className = 'not-playtest';
-    msg.append('Navigate to a Moxfield playtest page', document.createElement('br'), 'to use MoxMox.');
+    // Distinguish "wrong page" from "orphaned tab": after a reload of the
+    // extension in chrome://extensions, the old content script cannot answer
+    // and the fix is to refresh the tab, not to navigate somewhere.
+    if (isPlaytestUrl(activeTab?.url)) {
+      msg.append(
+        'Cet onglet a perdu le contact avec l’extension',
+        document.createElement('br'),
+        '(extension rechargée). Fais F5 sur l’onglet Moxfield.',
+      );
+    } else {
+      msg.append('Navigate to a Moxfield playtest page', document.createElement('br'), 'to use MoxMox.');
+    }
     contentEl.appendChild(msg);
     return;
   }
@@ -36,6 +47,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 });
 
+/** The active tab, kept so the room card can build the invite URL and the
+ *  panel toggle can address the right content script. */
+let activeTab = null;
+
 async function queryContentScript() {
   try {
     const [tab] = await chrome.tabs.query({
@@ -43,12 +58,24 @@ async function queryContentScript() {
       currentWindow: true,
     });
     if (!tab?.id) return null;
+    activeTab = tab;
 
     return await chrome.tabs.sendMessage(tab.id, {
       type: 'moxmox:get-state',
     });
   } catch {
     return null;
+  }
+}
+
+function isPlaytestUrl(url) {
+  if (!url) return false;
+  try {
+    const u = new URL(url);
+    return (u.hostname === 'moxfield.com' && /\/decks\/[^/]+\/goldfish$/.test(u.pathname)) ||
+      (u.hostname === 'archidekt.com' && /\/playtester-v2\/\d+/.test(u.pathname));
+  } catch {
+    return false;
   }
 }
 
@@ -179,16 +206,81 @@ function updatePanel(state) {
     ? `${(state.players || []).filter(p => p.connected !== false).length}/${state.maxPlayers || 2}`
     : '–';
   rows.push(createStatusRow('Seats', seatsText));
-  if (state.roomId) {
-    rows.push(createStatusRow('Room', state.roomId, { valueClassName: 'room-id' }));
-  }
   for (const player of state.players || []) {
     rows.push(createStatusRow(player.username || 'Player', playerStatusText(player), {
       dotClassName: player.connected === false ? '' : 'green',
     }));
   }
 
-  panelEl.replaceChildren(...rows);
+  // The room card first: the code is what you need mid-game, and the popup is
+  // reachable even while the spectator panel covers Moxfield's own toolbar.
+  const blocks = state.roomId ? [buildRoomCard(state)] : [];
+  panelEl.replaceChildren(...blocks, ...rows);
+}
+
+function buildRoomCard(state) {
+  const card = document.createElement('div');
+  card.className = 'room-card';
+
+  const label = document.createElement('div');
+  label.className = 'room-card-label';
+  label.textContent = state.gameType === 'traditional' ? 'Code de la partie' : 'Room';
+  card.appendChild(label);
+
+  const code = document.createElement('button');
+  code.className = 'room-code-big';
+  code.textContent = state.roomId;
+  code.title = 'Cliquer pour copier le code';
+  code.addEventListener('click', () => copyWithFeedback(code, state.roomId, state.roomId));
+  card.appendChild(code);
+
+  const actions = document.createElement('div');
+  actions.className = 'room-card-actions';
+
+  const linkBtn = document.createElement('button');
+  linkBtn.textContent = 'Copier le lien d’invitation';
+  linkBtn.addEventListener('click', () => {
+    const link = buildInviteUrl(state.roomId);
+    if (link) copyWithFeedback(linkBtn, link, 'Copier le lien d’invitation');
+  });
+  actions.appendChild(linkBtn);
+
+  if (state.gameType === 'traditional') {
+    const panelBtn = document.createElement('button');
+    panelBtn.textContent = state.panelVisible ? 'Masquer les boards adverses' : 'Afficher les boards adverses';
+    panelBtn.addEventListener('click', async () => {
+      try {
+        const res = await chrome.tabs.sendMessage(activeTab.id, { type: 'moxpod:toggle-panel' });
+        panelBtn.textContent = res?.visible ? 'Masquer les boards adverses' : 'Afficher les boards adverses';
+      } catch { /* orphaned tab */ }
+    });
+    actions.appendChild(panelBtn);
+  }
+
+  card.appendChild(actions);
+  return card;
+}
+
+function buildInviteUrl(roomId) {
+  if (!activeTab?.url) return null;
+  try {
+    const url = new URL(activeTab.url);
+    url.searchParams.set('moxmoxroom', roomId);
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+function copyWithFeedback(el, text, restoreText) {
+  navigator.clipboard.writeText(text).then(() => {
+    el.classList.add('copied');
+    el.textContent = '✓ Copié';
+    setTimeout(() => {
+      el.classList.remove('copied');
+      el.textContent = restoreText;
+    }, 1200);
+  }, () => {});
 }
 
 function createStatusRow(labelText, valueText, { dotClassName = null, valueClassName = 'status-value' } = {}) {

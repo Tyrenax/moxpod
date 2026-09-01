@@ -197,7 +197,11 @@ playtest-specific properties:
   left:         80,         // Pixel X position (battlefield only)
   zIndex:       3,          // Stacking order (battlefield only)
   counters:     0,          // Counter count
-  adjustedPower:     0,     // Modified P/T/loyalty
+  // ABSOLUTE current values, NOT deltas: Moxfield auto-fills these with the
+  // printed P/T for creatures on the battlefield, and editing the P/T box
+  // overwrites them with the new totals. 0/0 means "untouched". Verified in a
+  // live pod on 2026-08-30 -- treating them as deltas doubles every creature.
+  adjustedPower:     0,
   adjustedToughness: 0,
   adjustedLoyalty:   0,
   abilities:    [],

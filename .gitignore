@@ -9,3 +9,7 @@ web-ext-artifacts/
 
 # local wrangler state
 server/.wrangler/
+
+# packaged release zips
+release/
+RELEASE_NOTES.md

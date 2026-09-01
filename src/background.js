@@ -3,7 +3,7 @@
 const UPDATE_ALARM = 'moxmox:update-check';
 const UPDATE_STATE_KEY = 'moxmox_update_state';
 const UPDATE_CHECK_MINUTES = 6 * 60;
-const LATEST_RELEASE_URL = 'https://api.github.com/repos/natefinch/moxmox/releases/latest';
+const LATEST_RELEASE_URL = 'https://api.github.com/repos/Tyrenax/moxpod/releases/latest';
 
 chrome.runtime.onInstalled.addListener(() => {
   scheduleUpdateChecks();
@@ -62,7 +62,7 @@ async function checkForUpdate() {
       checkedAt,
       currentVersion,
       latestVersion,
-      latestUrl: release.html_url || 'https://github.com/natefinch/moxmox/releases/latest',
+      latestUrl: release.html_url || 'https://github.com/Tyrenax/moxpod/releases/latest',
       updateAvailable,
       dismissedVersion,
     };
@@ -94,10 +94,10 @@ async function applyUpdateBadge(state) {
   if (state?.updateAvailable) {
     await action.setBadgeText({ text: 'UP' });
     await action.setBadgeBackgroundColor({ color: '#f59e0b' });
-    await action.setTitle({ title: `MoxMox update available: ${state.latestVersion}` });
+    await action.setTitle({ title: `MoxPod : mise à jour disponible — ${state.latestVersion}` });
   } else {
     await action.setBadgeText({ text: '' });
-    await action.setTitle({ title: 'MoxMox' });
+    await action.setTitle({ title: 'MoxPod' });
   }
 }
 

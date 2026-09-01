@@ -123,6 +123,57 @@
       color: #555;
     }
 
+    /* ── Room card ── */
+    .room-card {
+      border: 1px solid #b7cdf2;
+      border-radius: 6px;
+      background: #eef4ff;
+      padding: 8px 10px;
+      margin-bottom: 8px;
+      text-align: center;
+    }
+    .room-card-label {
+      font-size: 11px;
+      color: #4a668f;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 4px;
+    }
+    .room-code-big {
+      display: block;
+      width: 100%;
+      border: 1px dashed #8fb0e0;
+      border-radius: 5px;
+      background: #fff;
+      font-family: 'SF Mono', Menlo, Consolas, monospace;
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: 0.18em;
+      color: #1d3c6e;
+      padding: 6px 4px;
+      cursor: pointer;
+      word-break: break-all;
+    }
+    .room-code-big:hover { background: #f4f8ff; }
+    .room-code-big.copied,
+    .room-card-actions button.copied { color: #2e7d32; border-color: #2e7d32; }
+    .room-card-actions {
+      display: flex;
+      gap: 6px;
+      margin-top: 6px;
+    }
+    .room-card-actions button {
+      flex: 1;
+      padding: 5px 6px;
+      border: 1px solid #8fb0e0;
+      border-radius: 4px;
+      background: #fff;
+      color: #1d3c6e;
+      cursor: pointer;
+      font-size: 11px;
+    }
+    .room-card-actions button:hover { background: #f4f8ff; }
+
     /* ── Not on playtest ── */
     .not-playtest {
       text-align: center;
@@ -229,7 +280,7 @@
   </style>
 </head>
 <body>
-  <h1>MoxMox</h1>
+  <h1>MoxPod</h1>
 
   <div id="content">
     <!-- Populated by popup.js -->

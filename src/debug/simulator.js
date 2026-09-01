@@ -268,14 +268,17 @@ export class BoardSimulator {
       }
       case 'pt': {
         // The case the whole feature exists for: a -1/-1 that the opponent
-        // applied themselves and we simply need to display.
+        // applied themselves and we simply need to display. Moxfield stores
+        // adjusted P/T as the ABSOLUTE current value (not a delta), so the
+        // simulator does the same: printed value +/- 1.
         const card = this._sample(bf);
         if (card) {
+          const entry = snapshot.dict[card.k] || {};
+          const basePower = Number(entry.p) || 2;
+          const baseToughness = Number(entry.g) || 2;
           const delta = this._rng() < 0.5 ? -1 : 1;
-          const p = (card.s.p || 0) + delta;
-          const t = (card.s.g || 0) + delta;
-          if (p) card.s.p = p; else delete card.s.p;
-          if (t) card.s.g = t; else delete card.s.g;
+          card.s.p = basePower + delta;
+          card.s.g = baseToughness + delta;
         }
         break;
       }

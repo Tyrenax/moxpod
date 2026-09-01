@@ -18,7 +18,10 @@
     "relay:verbose": "node server/dev-relay.js --verbose",
     "relay:lossy": "node server/dev-relay.js --verbose --latency 150 --loss 0.05",
     "relay:slow": "node server/dev-relay.js --verbose --rate 1",
-    "dev": "node build.js chrome --watch"
+    "dev": "node build.js chrome --watch",
+    "package": "node package.js",
+    "version": "node sync-version.js && git add manifests/base.json",
+    "release": "echo \"npm version patch|minor|major, puis: git push origin main --follow-tags\""
   },
   "devDependencies": {
     "@playwright/test": "^1.60.0",

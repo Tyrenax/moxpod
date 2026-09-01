@@ -1,0 +1,95 @@
+name: Release
+
+# Push a tag and GitHub does the rest -- no local `gh` login needed, the
+# runner's built-in GITHUB_TOKEN publishes the release.
+#
+#   npm version patch    (or minor / major)  -- bumps package.json + tags
+#   git push origin main --follow-tags
+#
+# The workflow refuses to publish if the tag and package.json disagree, or if
+# the tests fail, so a broken build can never reach your friends.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (must already exist)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Check the tag matches package.json
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          PKG="v$(node -p "require('./package.json').version")"
+          MANIFEST="v$(node -p "require('./manifests/base.json').version")"
+          echo "tag=$TAG package.json=$PKG manifest=$MANIFEST"
+          if [ "$TAG" != "$PKG" ] || [ "$TAG" != "$MANIFEST" ]; then
+            echo "::error::Version mismatch. Tag $TAG, package.json $PKG, manifest $MANIFEST."
+            exit 1
+          fi
+
+      # A release that fails its own tests is worse than no release.
+      - run: npm run test:unit
+      - run: npm run test:build
+
+      - name: Package
+        run: npm run package
+
+      - name: Write release notes
+        id: notes
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          {
+            echo "## Installation"
+            echo
+            echo "1. Télécharge \`moxpod-chrome-$TAG.zip\` ci-dessous et **décompresse-le** dans un dossier que tu gardes (ne le supprime pas après, Chrome lit dedans en permanence)."
+            echo "2. Va sur \`chrome://extensions\` et active **Mode développeur** en haut à droite."
+            echo "3. Clique **Charger l'extension non empaquetée** et choisis le dossier décompressé."
+            echo "4. Ouvre un deck en playtest : \`https://moxfield.com/decks/<ton-deck>/goldfish\`"
+            echo
+            echo "Pour Firefox, prends \`moxpod-firefox-$TAG.zip\` et charge-le via \`about:debugging\` → **Ce Firefox** → **Charger un module temporaire**."
+            echo
+            echo "> **Tout le monde dans la pod doit avoir la même version.** L'extension vérifie les nouvelles releases toute seule et affiche un badge orange \`UP\` sur son icône quand une mise à jour existe."
+            echo
+            echo "## Mise à jour"
+            echo
+            echo "Retélécharge le zip, écrase le contenu du dossier, puis clique l'icône **recharger** de MoxPod dans \`chrome://extensions\`. Rafraîchis les onglets Moxfield ouverts."
+            echo
+            echo "## Utilisation"
+            echo
+            echo "Crée ou rejoins une partie depuis le menu MoxPod sur la page de playtest. Le board des adversaires s'affiche en haut : onglets ou touches 1-4 pour changer de joueur, bouton \`50/50\` pour la répartition de l'écran, Échap pour masquer, et l'icône de l'extension pour le rouvrir."
+            echo
+            echo "Détail technique complet : [MOXPOD.md](https://github.com/Tyrenax/moxpod/blob/main/MOXPOD.md)"
+          } > RELEASE_NOTES.md
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          gh release create "$TAG" \
+            --title "MoxPod $TAG" \
+            --notes-file RELEASE_NOTES.md \
+            release/moxpod-chrome-*.zip \
+            release/moxpod-firefox-*.zip

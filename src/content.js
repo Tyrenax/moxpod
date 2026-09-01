@@ -3294,19 +3294,25 @@ function addLog(direction, text) {
 }
 
 function notifyPopup() {
-  chrome.runtime.sendMessage({
-    type: 'moxmox:state-update',
-    localStatus,
-    remoteStatus,
-    role,
-    gameType,
-    maxPlayers,
-    roomId: currentRoomId,
-    localHandCount,
-    players: [...remotePlayers.values()],
-    log: messageLog,
-    isGoldfish: true,
-  }).catch(() => {});
+  // chrome.runtime.sendMessage THROWS synchronously (not a rejected promise)
+  // once the extension has been reloaded and this content script is orphaned.
+  // The batcher keeps flushing at ~3 Hz, so without this guard an orphaned tab
+  // spams "Extension context invalidated" until it is refreshed.
+  try {
+    chrome.runtime.sendMessage({
+      type: 'moxmox:state-update',
+      localStatus,
+      remoteStatus,
+      role,
+      gameType,
+      maxPlayers,
+      roomId: currentRoomId,
+      localHandCount,
+      players: [...remotePlayers.values()],
+      log: messageLog,
+      isGoldfish: true,
+    }).catch(() => {});
+  } catch { /* orphaned content script — refresh the tab to reattach */ }
 }
 
 // ── Popup message handler ───────────────────────────────────────────
@@ -3324,7 +3330,15 @@ function handlePopupMessage(message, _sender, sendResponse) {
       players: [...remotePlayers.values()],
       log: messageLog,
       isGoldfish: true,
+      panelVisible: boardFeature.panel.prefs.visible,
     });
+    return true;
+  }
+  // The spectator panel covers Moxfield's own toolbar, so the popup is the
+  // one place always reachable to reopen it once hidden.
+  if (message?.type === 'moxpod:toggle-panel') {
+    boardFeature.togglePanel();
+    sendResponse({ ok: true, visible: boardFeature.panel.prefs.visible });
     return true;
   }
 }
