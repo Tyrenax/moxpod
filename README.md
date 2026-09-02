@@ -106,13 +106,20 @@ Architecture, protocole réseau et limites connues : **[MOXPOD.md](MOXPOD.md)**.
 ### Publier une release
 
 ```bash
-npm version patch      # ou minor / major — bump package.json + manifeste + tag
-git push origin main --follow-tags
+npm version patch                 # bump package.json + manifeste + tag
+git push origin main              # d'abord la branche
+git push origin v0.1.2            # PUIS le tag, seul
 ```
 
 GitHub Actions construit, teste, empaquette et publie la release avec les zips.
 Le workflow refuse de publier si les tests échouent ou si le tag ne correspond
 pas à la version du manifeste.
+
+> **Pousse le tag seul, pas avec `--follow-tags`.** GitHub ne déclenche aucun
+> workflow quand plus de trois tags arrivent dans le même push. Ce dépôt porte
+> les tags hérités de MoxMox, donc `--follow-tags` en pousse plusieurs d'un
+> coup et la release ne part jamais — c'est exactement ce qui est arrivé à
+> v0.1.1, taguée mais jamais publiée.
 
 ---
 

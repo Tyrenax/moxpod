@@ -4,7 +4,13 @@ name: Release
 # runner's built-in GITHUB_TOKEN publishes the release.
 #
 #   npm version patch    (or minor / major)  -- bumps package.json + tags
-#   git push origin main --follow-tags
+#   git push origin main
+#   git push origin vX.Y.Z          <- the tag ALONE
+#
+# Push the tag on its own. GitHub creates no workflow runs at all when more
+# than three tags arrive in one push, and this repo carries MoxMox's inherited
+# tags, so `--follow-tags` pushes several and the release silently never runs.
+# That is how v0.1.1 ended up tagged but never published.
 #
 # The workflow refuses to publish if the tag and package.json disagree, or if
 # the tests fail, so a broken build can never reach your friends.
