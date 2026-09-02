@@ -618,3 +618,39 @@ body.moxpod-resizing {
 
 .moxpod-debug .muted, .moxpod-panel .muted { color: var(--moxpod-muted); }
 .moxpod-debug code { color: var(--moxpod-accent); }
+
+/* ── Floating fallback ───────────────────────────────────────────────
+ *
+ * Shown when no toolbar anchor can be found (narrow viewport, or the ad slots
+ * a non-subscriber's Moxfield page carries change the toolbar markup). Being
+ * unable to find a decoration point must never mean being unable to join a
+ * game, so the widget parks itself top-left instead of not existing.
+ */
+
+.moxmox-widget.moxpod-floating {
+  position: fixed !important;
+  top: 8px;
+  left: 8px;
+  z-index: 2147482000;
+  background: var(--moxpod-bg-2);
+  border: 1px solid var(--moxpod-accent);
+  border-radius: 8px;
+  padding: 6px 10px;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.55);
+  cursor: move;
+  max-width: 340px;
+}
+
+.moxmox-widget.moxpod-floating::before {
+  content: "flottant";
+  position: absolute;
+  top: -8px;
+  right: 8px;
+  background: var(--moxpod-accent);
+  color: #0b1020;
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 4px;
+  letter-spacing: 0.04em;
+}

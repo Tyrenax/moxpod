@@ -59,6 +59,7 @@ class DebugPanel {
       batcher: this._feature.batcher,
       panel: this._feature.panel,
       debug: this,
+      probeToolbar: () => probeToolbar(),
       help: () => console.log(HELP_TEXT),
     };
     console.log('[MoxPod] dev console ready — Ctrl+Shift+D, or window.moxpod.help()');
@@ -139,6 +140,7 @@ class DebugPanel {
       case 'panel-toggle': this._feature.togglePanel(); break;
       case 'resync': this._feature.batcher.requestFull(); break;
       case 'probe': this._probeDom(); break;
+      case 'probe-toolbar': this._tracer.info('sys', 'toolbar:probe', probeToolbar()); this._selectTab('log'); break;
       case 'relay': this._setRelay(target.dataset.url); break;
       default: break;
     }
@@ -363,6 +365,7 @@ class DebugPanel {
         <h4>Diagnostic</h4>
         <div class="moxpod-debug-row">
           <button data-act="probe">Sonder la mise en page</button>
+          <button data-act="probe-toolbar">Sonder la barre d'outils</button>
         </div>
         <p class="muted">
           Écrit dans le log la chaîne d'éléments qui composent le battlefield de
@@ -451,6 +454,32 @@ class DebugPanel {
   }
 }
 
+/**
+ * What the widget anchor search can see. This is what to ask for when someone
+ * reports "no MoxPod menu on my page" -- it says whether the zoom indicator
+ * exists, what the nav items are, and whether the widget ended up floating.
+ */
+export function probeToolbar() {
+  const navItems = [...document.querySelectorAll('nav li, nav button, nav a')]
+    .map(el => (el.textContent || '').trim())
+    .filter(t => t && t.length < 40)
+    .slice(0, 40);
+  const percent = [...document.querySelectorAll('nav *, [class*="toolbar"] *, header *')]
+    .filter(el => el.children.length === 0 && /^\d+%$/.test((el.textContent || '').trim()))
+    .map(el => `${el.tagName}.${(el.className || '').toString().slice(0, 40)}`);
+  const widget = document.querySelector('.moxmox-widget');
+  return {
+    url: location.href,
+    viewport: `${window.innerWidth}x${window.innerHeight}`,
+    navCount: document.querySelectorAll('nav').length,
+    navItems,
+    zoomIndicators: percent,
+    widgetPresent: !!widget,
+    widgetFloating: !!widget?.classList.contains('moxpod-floating'),
+    adsPresent: !!document.querySelector('[id*="nitro"], [class*="nitro"], [id*="google_ads"], ins.adsbygoogle'),
+  };
+}
+
 const HELP_TEXT = `window.moxpod
   .sim.start() / .sim.stop() / .sim.step()   adversaires factices
   .sim.injectGap()                           provoquer une désync
@@ -460,7 +489,8 @@ const HELP_TEXT = `window.moxpod
   .batcher.requestFull()                     renvoyer un snapshot complet
   .panel.setVisible(true) / .panel.select('p2')
   .tracer.records({ category: 'board' })
-  .tracer.exportReport()`;
+  .tracer.exportReport()
+  .probeToolbar()                            pourquoi le menu n'apparait pas`;
 
 function readRelay() {
   try { return localStorage.getItem('moxpod_relay'); } catch { return null; }

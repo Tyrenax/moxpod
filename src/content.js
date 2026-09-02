@@ -42,6 +42,12 @@ const SESSION_GAME_TYPE_KEY = 'moxmox_game_type';
 const SESSION_SHARE_BF_KEY = 'moxmox_share_battlefield';
 const SESSION_SHARE_GY_KEY = 'moxmox_share_gy_exile';
 const MSG_TAG = 'moxmox';
+
+// Sentinel anchor meaning "no toolbar slot found, show the widget floating".
+// Declared up here on purpose: ensurePlaytestInitialized() runs during module
+// evaluation and can reach injectButton synchronously, so a const declared
+// further down would be in its temporal dead zone and throw.
+const FLOATING_ANCHOR = Symbol('moxpod-floating-anchor');
 const SHARED_ZONES = new Set(['library', 'graveyard', 'exile']);
 const GAME_TYPE_SHARED = 'shared';
 const GAME_TYPE_TRADITIONAL = 'traditional';
@@ -418,9 +424,31 @@ function waitForToolbar(callback, retries = 30, delay = 500) {
   }
   if (retries > 0) {
     setTimeout(() => waitForToolbar(callback, retries - 1, delay), delay);
-  } else {
-    console.warn('[MoxMox] Could not find playtest toolbar');
+    return;
   }
+
+  // Out of retries. Previously we logged a warning and stopped, which left the
+  // player with no widget and therefore no way to create or join a game --
+  // seen on an ad-carrying (non-subscriber) Moxfield page. Instead: float the
+  // widget now so the player can act, and keep watching in case the real
+  // toolbar shows up later (it can, after ads finish laying out).
+  console.warn('[MoxPod] Toolbar not found — widget shown floating. ' +
+    'Report this with the output of window.moxpod.probeToolbar().');
+  callback(FLOATING_ANCHOR);
+
+  const observer = new MutationObserver(() => {
+    const late = findToolbarAnchor();
+    if (!late) return;
+    observer.disconnect();
+    const floating = document.querySelector('.moxmox-widget.moxpod-floating');
+    if (!floating) return;
+    console.log('[MoxPod] Toolbar appeared — re-anchoring the widget.');
+    removeWidget();
+    callback(late);
+  });
+  observer.observe(document.body, { childList: true, subtree: true });
+  // Do not watch forever; a page that never grows a toolbar keeps the float.
+  setTimeout(() => observer.disconnect(), 60000);
 }
 
 function findToolbarAnchor() {
@@ -442,13 +470,35 @@ function isArchidektToolbarAnchor(element) {
   return element?.matches?.('div[class*="archidektDropdown_trigger"][class*="lifePlayerCounters_fullHeight"]');
 }
 
+// Moxfield's zoom indicator ("100%") is the nicest anchor, but it is not
+// always there: the control is hidden on narrow viewports, and a non-
+// subscriber's page carries ad slots that change the toolbar markup. So we
+// try progressively looser anchors and, failing everything, float the widget
+// rather than leave the player with no way to join a game.
 function findMoxfieldZoomElement() {
-  const listItems = document.querySelectorAll('nav li');
-  for (const li of listItems) {
+  // Preferred: the zoom percentage inside a nav list item.
+  for (const li of document.querySelectorAll('nav li')) {
     if (/^\d+%$/.test(li.textContent.trim())) return li;
+  }
+  // Same thing, anywhere (their markup does not always use nav > li).
+  for (const el of document.querySelectorAll('nav *, [class*="toolbar"] *, header *')) {
+    if (el.children.length === 0 && /^\d+%$/.test(el.textContent.trim())) {
+      return el.closest('li') || el;
+    }
+  }
+  // Fall back to a recognisable playtest control in the toolbar.
+  const labels = /^(shuffle|draw|untap|next turn|restart|add token|view library|sleeves|player)$/i;
+  for (const el of document.querySelectorAll('nav li, nav button, nav a')) {
+    if (labels.test(el.textContent.trim())) return el;
   }
   return null;
 }
+
+/** True when the anchor is not a real toolbar slot and we must float instead. */
+function isFloatingAnchor(anchor) {
+  return anchor === FLOATING_ANCHOR;
+}
+
 
 // ── Button injection ────────────────────────────────────────────────
 
@@ -535,6 +585,12 @@ function injectButton(zoomElement) {
   document.addEventListener('click', () => {
     if (menuEl) { menuEl.remove(); menuEl = null; }
   });
+
+  if (isFloatingAnchor(zoomElement)) {
+    widget.classList.add('moxpod-floating');
+    document.body.appendChild(widget);
+    return;
+  }
 
   if (archidektAnchor) {
     zoomElement.after(widget);
