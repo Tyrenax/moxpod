@@ -53,7 +53,7 @@ export class MoxfieldAdapter {
     }
     this._controller = new PlaytestController();
     if (this._controller.isAvailable()) {
-      console.log('[MoxMox MAIN] MoxfieldAdapter ready');
+      console.log('[MoxPod MAIN] MoxfieldAdapter ready');
       this._setupEventDetection();
       resolve();
       return;
@@ -68,7 +68,7 @@ export class MoxfieldAdapter {
         const s = current.stateNode;
         if (s && s !== window && s.state?.zones) {
           const zoneKeys = Object.keys(s.state.zones);
-          console.log(`[MoxMox MAIN] depth ${depth}: FOUND ZONES!`, {
+          console.log(`[MoxPod MAIN] depth ${depth}: FOUND ZONES!`, {
             zoneKeys,
             hasSetState: typeof s.setState === 'function',
             hasSaveData: typeof s.handleSaveData === 'function',
@@ -78,13 +78,13 @@ export class MoxfieldAdapter {
         current = current.return;
       }
     }
-    console.log(`[MoxMox MAIN] init retry ${30 - retries + 1}/30`);
+    console.log(`[MoxPod MAIN] init retry ${30 - retries + 1}/30`);
 
     this._controller = null;
     if (retries > 0) {
       setTimeout(() => this._tryInit(retries - 1, delay, resolve), delay);
     } else {
-      console.warn('[MoxMox MAIN] Could not find playtest component');
+      console.warn('[MoxPod MAIN] Could not find playtest component');
       resolve();
     }
   }

@@ -1,8 +1,8 @@
-# MoxMox — Copilot Instructions
+# MoxPod — Copilot Instructions
 
 ## Project Overview
 
-MoxMox is a browser extension for Chrome and Firefox that enables two-player
+MoxPod is a browser extension for Chrome and Firefox that enables multiplayer
 Magic: The Gathering games on Moxfield's playtest page. It synchronizes game
 state between two players over a WebSocket relay server.
 

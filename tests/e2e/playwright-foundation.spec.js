@@ -12,6 +12,16 @@ const ARCHIDEKT_PLAYTEST_URL = 'https://archidekt.com/playtester-v2/21256567';
 // mock covering the wrong repo, the real request escaped the network guard,
 // and the whole E2E suite failed on a one-line change in background.js.
 const GITHUB_LATEST_URL = readReleaseUrl();
+// Same reasoning as the URL above: read the product name from the manifest so
+// renaming the extension does not silently break these assertions.
+const WIDGET_TITLE = `${readManifestName()} — Play Together`;
+
+function readManifestName() {
+  const manifest = JSON.parse(readFileSync(
+    fileURLToPath(new URL('../../manifests/base.json', import.meta.url)), 'utf8',
+  ));
+  return manifest.name;
+}
 
 function readReleaseUrl() {
   const source = readFileSync(
@@ -32,7 +42,7 @@ test('loads the built extension on a manifest-matched Moxfield playtest origin',
     const page = await extension.context.newPage();
     await page.goto(MOXFIELD_PLAYTEST_URL);
 
-    await expect(page.locator('.moxmox-widget')).toContainText('MoxMox — Play Together');
+    await expect(page.locator('.moxmox-widget')).toContainText(WIDGET_TITLE);
     await expect(page.locator('.moxmox-set-username-btn')).toHaveText('Set Username');
     expect(extension.serviceWorker.url()).toBe(`chrome-extension://${extension.extensionId}/background.js`);
 
@@ -91,7 +101,7 @@ test('injects the widget after Archidekt playtester life counters', async () => 
     const lifeCounters = page.locator(
       'div[class*="archidektDropdown_trigger"][class*="lifePlayerCounters_fullHeight"]',
     );
-    await expect(page.locator('.moxmox-widget')).toContainText('MoxMox — Play Together');
+    await expect(page.locator('.moxmox-widget')).toContainText(WIDGET_TITLE);
     await expect(page.locator('.moxmox-set-username-btn')).toHaveText('Set Username');
 
     await expect.poll(() => lifeCounters.evaluate(element =>
@@ -126,7 +136,7 @@ test('detects an Archidekt shared invite added after content script initializati
 
     const page = await extension.context.newPage();
     await page.goto(ARCHIDEKT_PLAYTEST_URL);
-    await expect(page.locator('.moxmox-widget')).toContainText('MoxMox — Play Together');
+    await expect(page.locator('.moxmox-widget')).toContainText(WIDGET_TITLE);
     await expect(page.locator('.moxmox-popup')).toHaveCount(0);
 
     await page.evaluate(() => {
@@ -272,7 +282,7 @@ function moxfieldPlaytestFixture() {
   return `<!doctype html>
     <html>
       <head>
-        <title>MoxMox Playwright Fixture</title>
+        <title>MoxPod Playwright Fixture</title>
         <style>
           nav ul { display: flex; gap: 8px; list-style: none; }
         </style>
@@ -333,7 +343,7 @@ function archidektPlaytesterFixture() {
   return `<!doctype html>
     <html>
       <head>
-        <title>MoxMox Archidekt Playwright Fixture</title>
+        <title>MoxPod Archidekt Playwright Fixture</title>
         <style>
           body { min-height: 720px; margin: 0; }
           .mobileToolbar_bar__Sji09 {

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// MoxMox build script — bundles src/ into dist/chrome/ and dist/firefox/.
+// MoxPod build script — bundles src/ into dist/chrome/ and dist/firefox/.
 
 import * as esbuild from 'esbuild';
 import { readFileSync, writeFileSync, mkdirSync, cpSync, rmSync, existsSync } from 'fs';

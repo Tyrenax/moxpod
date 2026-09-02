@@ -1,8 +1,8 @@
-# MoxMox — Source Architecture
+# MoxPod — Source Architecture
 
 ## Overview
 
-MoxMox is a browser extension that enables two-player Magic: The Gathering
+MoxPod is a browser extension that enables multiplayer Magic: The Gathering
 games on [Moxfield's playtest page](https://moxfield.com). It hooks into
 Moxfield's React internals to read and manipulate the game state, and uses a
 Cloudflare Durable Object relay server to synchronize state between two
@@ -29,7 +29,7 @@ src/
 ## Two-World Architecture
 
 Chrome MV3 content scripts run in an **isolated world** by default, which
-cannot access page JavaScript (React state, etc.). MoxMox uses two content
+cannot access page JavaScript (React state, etc.). MoxPod uses two content
 scripts:
 
 | Script | World | Can Access | Purpose |
@@ -143,7 +143,7 @@ game session.
 |-------|-------|---------|
 | `card.id` | Moxfield | Card template ID (shared by all copies of the same card) |
 | `card.zoneId` | Per-player | Unique per-copy within one player's game (assigned by Moxfield) |
-| `card.syncId` | Cross-player | Unique per-copy across both players (assigned by MoxMox at game start) |
+| `card.syncId` | Cross-player | Unique per-copy across both players (assigned at game start) |
 
 ### Card Materialization
 
@@ -397,7 +397,7 @@ to full height.
 
 ## Traditional Card Gifting
 
-In Traditional games, MoxMox augments Moxfield card context menus with
+In Traditional games, MoxPod augments Moxfield card context menus with
 **Give to <Opponent>** entries after the existing "Move To..." actions. Giving a
 card removes it locally and sends a targeted `gift-card` `zone-sync` payload
 containing the exact card state, so the recipient can render it even if it is not
@@ -405,11 +405,11 @@ in their deck. The recipient receives the card in the center of their
 battlefield with ownership metadata.
 
 If a gifted card is moved into the recipient's hand, library, graveyard, or
-exile, MoxMox removes it from the recipient and sends a targeted `gift-return`
+exile, MoxPod removes it from the recipient and sends a targeted `gift-return`
 payload so it appears in that same zone for the original owner.
 
 The recipient can also use the same context menu to give the card back to its
-original owner. In that case MoxMox sends a targeted
+original owner. In that case MoxPod sends a targeted
 `gift-return-battlefield` payload, removes the local gifted copy, and restores
 the card to the owner's battlefield without gift metadata.
 
@@ -432,7 +432,7 @@ in `chrome.storage.local` (persists across sessions) and sent with the
 The extension injects a multi-line widget into Moxfield's playtest navbar:
 
 ```
-☰  MoxMox — Play Together
+☰  MoxPod — Play Together
 🟢 NateFinch           ❤️ 20    🟢 Player 3 ▾          ❤️ 40
 🟢 Opponent ▾          ❤️ 18    🟢 Player 4 ▾          ❤️ 40
 ```
@@ -465,7 +465,7 @@ centered during zoom changes and doesn't interfere with card dragging.
   via `instance.handleSaveData()`
 - **Room connection**: `sessionStorage` stores `moxmox_room`,
   `moxmox_role`, `moxmox_game_type`, and `moxmox_player_key` for reconnection
-  on page refresh. Navigating away from the playtest route leaves the MoxMox
+  on page refresh. Navigating away from the playtest route leaves the MoxPod
   room and clears this state.
 - **Connection reliability**: the content script sends a lightweight WebSocket
   heartbeat and automatically reconnects after unexpected disconnects

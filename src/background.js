@@ -1,4 +1,4 @@
-// MoxMox background service worker.
+// MoxPod background service worker.
 
 const UPDATE_ALARM = 'moxmox:update-check';
 const UPDATE_STATE_KEY = 'moxmox_update_state';

@@ -1,4 +1,4 @@
-// MoxMox popup — displays connection state and message log from the
+// MoxPod popup — displays connection state and message log from the
 // content script running on the active Moxfield playtest tab.
 //
 // Gets initial state via chrome.tabs.sendMessage, then listens for
@@ -31,7 +31,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         '(extension rechargée). Fais F5 sur l’onglet Moxfield.',
       );
     } else {
-      msg.append('Navigate to a Moxfield playtest page', document.createElement('br'), 'to use MoxMox.');
+      msg.append('Navigate to a Moxfield playtest page', document.createElement('br'), 'to use MoxPod.');
     }
     contentEl.appendChild(msg);
     return;
@@ -89,7 +89,7 @@ async function renderUpdateBanner(container) {
 
   const title = document.createElement('div');
   title.className = 'update-banner-title';
-  title.textContent = `MoxMox ${state.latestVersion} is available`;
+  title.textContent = `MoxPod ${state.latestVersion} is available`;
 
   const message = document.createElement('div');
   message.textContent = isFirefox()

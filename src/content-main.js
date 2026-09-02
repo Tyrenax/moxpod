@@ -1,4 +1,4 @@
-// MoxMox content-main script — runs in the page's MAIN world.
+// MoxPod content-main script — runs in the page's MAIN world.
 //
 // Thin dispatcher that detects the current site, creates the appropriate
 // adapter, and bridges postMessage commands to the adapter. All site-specific
@@ -82,7 +82,7 @@ function setupEventForwarding() {
   });
   adapter.on('card:state-changed', (ev) => {
     if (syncDepth > 0) {
-      console.log('[MoxMox MAIN] state-changed suppressed (syncDepth=' + syncDepth + ')');
+      console.log('[MoxPod MAIN] state-changed suppressed (syncDepth=' + syncDepth + ')');
       return;
     }
     post({ type: 'game-event', event: ev });
@@ -126,15 +126,15 @@ async function handleCommand(id, action, params) {
   let data;
   try {
     await controllerReady;
-    console.log(`[MoxMox MAIN] cmd: ${action}`, params);
+    console.log(`[MoxPod MAIN] cmd: ${action}`, params);
     if (SYNC_COMMANDS.has(action)) {
       data = await withSync(() => adapter.dispatch(action, params));
     } else {
       data = await adapter.dispatch(action, params);
     }
-    console.log(`[MoxMox MAIN] result: ${action}`, data);
+    console.log(`[MoxPod MAIN] result: ${action}`, data);
   } catch (err) {
-    console.error(`[MoxMox MAIN] error: ${action}`, err);
+    console.error(`[MoxPod MAIN] error: ${action}`, err);
     data = { error: err.message };
   }
   post({ type: 'result', id, data });

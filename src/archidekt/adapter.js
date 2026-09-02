@@ -61,23 +61,23 @@ export class ArchidektAdapter {
     if (result) {
       this._store = result.store;
       this._fiberKey = result.fiberKey;
-      console.log('[MoxMox MAIN] ArchidektAdapter: Redux store found');
+      console.log('[MoxPod MAIN] ArchidektAdapter: Redux store found');
       this._setupChangeDetection();
       // Start action type discovery in the background.
       this._actionTypePromise = discoverActionType(this._store).then(type => {
         this._actionType = type;
       }).catch(err => {
-        console.warn('[MoxMox MAIN] Action type discovery failed:', err.message);
+        console.warn('[MoxPod MAIN] Action type discovery failed:', err.message);
       });
       resolve();
       return;
     }
 
-    console.log(`[MoxMox MAIN] Archidekt init retry ${30 - retries + 1}/30`);
+    console.log(`[MoxPod MAIN] Archidekt init retry ${30 - retries + 1}/30`);
     if (retries > 0) {
       setTimeout(() => this._tryInit(retries - 1, delay, resolve), delay);
     } else {
-      console.warn('[MoxMox MAIN] Could not find Archidekt Redux store');
+      console.warn('[MoxPod MAIN] Could not find Archidekt Redux store');
       resolve();
     }
   }
@@ -287,7 +287,7 @@ export class ArchidektAdapter {
 
   _dispatchState(payload) {
     if (!this._actionType) {
-      console.warn('[MoxMox MAIN] Cannot dispatch — action type not yet discovered');
+      console.warn('[MoxPod MAIN] Cannot dispatch — action type not yet discovered');
       return;
     }
     this._store.dispatch({ type: this._actionType, payload });

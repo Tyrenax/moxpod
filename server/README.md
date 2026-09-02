@@ -1,4 +1,4 @@
-# MoxMox Relay Server
+# MoxPod Relay Server
 
 A Cloudflare Worker + Durable Object that relays WebSocket messages between
 browser extension clients connected to the same room.
@@ -87,7 +87,7 @@ for the time spent processing messages.
   periods may still cause disconnects. Implement reconnection logic on the
   client side.
 
-## How It's Set Up in MoxMox
+## How It's Set Up in MoxPod
 
 ### Server Components
 

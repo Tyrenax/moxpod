@@ -1,4 +1,4 @@
-// Room and URL utilities for MoxMox.
+// Room and URL utilities for MoxPod.
 
 const BASE62 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
 const TRADITIONAL_ROOM_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';

@@ -132,7 +132,7 @@ export function discoverActionType(store, timeoutMs = 30000) {
         if (keys.some(k => GAME_KEYS.has(k))) {
           store.dispatch = origDispatch;
           clearTimeout(timer);
-          console.log('[MoxMox MAIN] Discovered Archidekt action type:', action.type);
+          console.log('[MoxPod MAIN] Discovered Archidekt action type:', action.type);
           resolve(action.type);
         }
       }

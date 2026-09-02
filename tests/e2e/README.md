@@ -14,7 +14,7 @@ That command rebuilds `dist/chrome/` before launching Chromium.
 
 `extension-fixture.js` starts Chromium with `dist/chrome/` installed as an MV3 extension. Each test gets a fresh persistent browser profile so extension storage, service workers, and page state do not leak between tests.
 
-The tests install a catch-all network guard before installing deterministic routes. Playwright invokes route handlers in reverse registration order, so mocked fixture routes win and every unmocked page or service-worker request is recorded as a failure. The launch helper also maps `api.github.com` to localhost so MoxMox's startup update check cannot reach the live network before a test has registered routes.
+The tests install a catch-all network guard before installing deterministic routes. Playwright invokes route handlers in reverse registration order, so mocked fixture routes win and every unmocked page or service-worker request is recorded as a failure. The launch helper also maps `api.github.com` to localhost so MoxPod's startup update check cannot reach the live network before a test has registered routes.
 
 ## Fixture coverage
 

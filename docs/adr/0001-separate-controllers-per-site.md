@@ -1,6 +1,6 @@
 # Separate controllers per playtest site
 
-MoxMox needs to manipulate game state on multiple playtest sites (Moxfield,
+MoxPod needs to manipulate game state on multiple playtest sites (Moxfield,
 Archidekt, and potentially others). Each site uses a fundamentally different
 state management approach — Moxfield uses a React class component with
 `setState` and a monkeypatched `handleSaveData`; Archidekt uses a Redux store

@@ -1,4 +1,4 @@
-// MoxMox content script — runs in the ISOLATED world.
+// MoxPod content script — runs in the ISOLATED world.
 //
 // Handles UI injection, WebSocket connection, game start flow, and
 // ongoing zone sync for the "Play Together" feature.
@@ -408,7 +408,7 @@ function handleMainMessage(e) {
       sendGiftReturnToBattlefield(e.data.targetId, e.data.gift);
       break;
     case 'ready':
-      console.log('[MoxMox] MAIN-world bridge ready');
+      console.log('[MoxPod] MAIN-world bridge ready');
       syncGiftStateToMain();
       break;
   }
@@ -521,7 +521,7 @@ function injectButton(zoomElement) {
   title.className = 'moxmox-widget-title';
 
   const titleText = document.createElement('span');
-  titleText.textContent = 'MoxMox — Play Together';
+  titleText.textContent = 'MoxPod — Play Together';
 
   const menuWrapper = document.createElement('span');
   menuWrapper.style.position = 'relative';
@@ -1854,7 +1854,7 @@ function handleServerMessage(data) {
         }
         showInviteResultPopup({
           title: 'Game Created',
-          subtitle: 'Send this url to a friend with MoxMox installed to have them join the game.',
+          subtitle: 'Send this url to a friend with MoxPod installed to have them join the game.',
           value: shareUrl,
           copiedText: 'Link copied to clipboard',
         });
@@ -2567,7 +2567,7 @@ async function handleRemoteSync(msg) {
         break;
     }
   } catch (err) {
-    console.error('[MoxMox] Sync error:', err);
+    console.error('[MoxPod] Sync error:', err);
   }
 }
 
@@ -2576,7 +2576,7 @@ async function handleRemoteSync(msg) {
 function showCurrentTraditionalRoomCodePopup() {
   showCurrentInviteValuePopup({
     title: 'Traditional Room Code',
-    subtitle: 'Share this code with players joining from the MoxMox Join menu.',
+    subtitle: 'Share this code with players joining from the MoxPod Join menu.',
     value: currentRoomId,
     copiedText: 'Room code copied to clipboard',
   });
@@ -2585,7 +2585,7 @@ function showCurrentTraditionalRoomCodePopup() {
 function showCurrentSharedInvitePopup() {
   showCurrentInviteValuePopup({
     title: 'Shared Deck Invite',
-    subtitle: 'Send this link to your opponent. They need the MoxMox extension installed.',
+    subtitle: 'Send this link to your opponent. They need the MoxPod extension installed.',
     value: buildShareUrl(stripRoomParam(window.location.href), currentRoomId),
     copiedText: 'Link copied to clipboard',
   });
@@ -2931,7 +2931,7 @@ function renderTraditionalCreate(container) {
       }
       showInviteResultPopup({
         title: 'Game Created',
-        subtitle: 'Send this room code to a friend, and have them click "Join" in the MoxMox menu from a Moxfield playtest page.',
+        subtitle: 'Send this room code to a friend, and have them click "Join" in the MoxPod menu from a Moxfield playtest page.',
         value: roomId,
         copiedText: 'Room code copied to clipboard',
       });

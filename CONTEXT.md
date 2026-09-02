@@ -1,6 +1,6 @@
-# MoxMox
+# MoxPod
 
-MoxMox is a browser extension that enables multiplayer Magic: The Gathering
+MoxPod is a browser extension that enables multiplayer Magic: The Gathering
 games on third-party playtest websites by synchronizing game state between
 players over a WebSocket relay.
 
@@ -12,7 +12,7 @@ A third-party website that provides a single-player MTG playtest engine
 _Avoid_: platform, host site
 
 **Site Adapter**:
-A per-site module that bridges MoxMox to a playtest site's internal state
+A per-site module that bridges MoxPod to a playtest site's internal state
 management. Each adapter discovers the site's game state (React class instance
 or Redux store), emits a common set of events, and accepts a common set of
 mutation commands.
@@ -25,7 +25,7 @@ wraps a React class component; ArchidektController wraps a Redux store.
 _Avoid_: manager, handler
 
 **syncId**:
-A MoxMox-assigned identifier that tracks a specific card instance across
+A MoxPod-assigned identifier that tracks a specific card instance across
 players. Generated locally, transmitted over the wire, and used to correlate
 the same physical card on both sides. Not a site-internal ID.
 _Avoid_: cardId, zoneId, instanceId

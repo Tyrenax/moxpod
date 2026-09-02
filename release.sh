@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# MoxMox Release Script
+# MoxMox Release Script (SUPERSEDED)
+#
+# Kept for reference only. MoxPod publishes through
+# .github/workflows/release.yml: `npm version patch` then
+# `git push origin main --follow-tags`. This script needs AMO signing
+# credentials and a local `gh` login, neither of which MoxPod uses.
 # Creates a git tag, builds the extension for Chrome and Firefox,
 # signs the Firefox extension via AMO, packages release assets,
 # and creates a draft GitHub release.
@@ -311,7 +316,7 @@ TAG_PUSHED=true
 echo "Creating draft release on GitHub..."
 gh release create "$TAG" "$CHROME_ZIP" "$FIREFOX_XPI" "$UPDATE_MANIFEST" \
   --repo natefinch/moxmox \
-  --title "MoxMox $TAG" \
+  --title "MoxPod $TAG" \
   --notes "## Installation
 
 ### Chrome

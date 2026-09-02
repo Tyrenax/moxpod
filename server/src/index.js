@@ -1,4 +1,4 @@
-// MoxMox relay server — Cloudflare Worker + Durable Object.
+// MoxPod relay server — Cloudflare Worker + Durable Object.
 //
 // Routes WebSocket connections and room metadata requests to per-room Durable
 // Objects. Shared Deck rooms are two-player rooms; Traditional rooms are
@@ -37,7 +37,7 @@ export default {
 
     // Health check.
     if (url.pathname === '/') {
-      return new Response('MoxMox Relay Server OK', {
+      return new Response('MoxPod Relay Server OK', {
         headers: { 'Content-Type': 'text/plain' },
       });
     }

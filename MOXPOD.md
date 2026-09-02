@@ -266,7 +266,7 @@ bien de lui.
 3. Ouvrir ton deck en playtest :
    `https://moxfield.com/decks/QL9jtDuds0-O6k1N5d0bKA/goldfish`
 4. `Ctrl+Shift+D` → onglet **Setup** → **Local (8787)**. La page recharge.
-5. Créer une partie traditionnelle depuis le menu MoxMox, noter le code.
+5. Créer une partie traditionnelle depuis le menu MoxPod, noter le code.
 6. **Deuxième session** : nouveau profil Chrome (ou fenêtre de navigation
    privée avec l'extension autorisée en privé), charger la même extension,
    ouvrir un deck, régler le relais sur Local (8787), rejoindre avec le code.
